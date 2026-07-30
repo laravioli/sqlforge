@@ -1,0 +1,39 @@
+[project]
+name = "sqlforge"
+version = "0.1.0"
+description = "A sql first python library"
+readme = "README.md"
+authors = [{ name = "Victor Le Couteur" }]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.13"
+dependencies = ["sqlglot[c]>=30.14.0"]
+
+[project.urls]
+Repository = "https://github.com/laravioli/sqlforge"
+Issues = "https://github.com/laravioli/sqlforge/issues"
+
+[project.scripts]
+sqlforge = "sqlforge:main"
+
+[dependency-groups]
+dev = [
+    "asyncpg>=0.31.0",
+    "msgspec>=0.21.1",
+    "pre-commit>=4.6.1",
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
