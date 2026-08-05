@@ -20,7 +20,9 @@ async def get_connection(dsn: str):
 
 # Types
 
-type TypeKind = Literal["scalar", "array", "composite", "range", "multirange"]
+type TypeKind = Literal[
+    "scalar", "array", "composite", "range", "multirange"
+]  # asyncpg classify pg types like this
 
 
 # builtin
