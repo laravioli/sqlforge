@@ -68,6 +68,7 @@ _TYPEINFO: typing.Final = """\
                     (
                         SELECT jsonb_agg(
                             jsonb_build_object(
+                                'attr_type',   ia.atttypid::int,
                                 'name',        ia.attname,
                                 'position',    ia.attnum,
                                 'not_null',    ia.attnotnull

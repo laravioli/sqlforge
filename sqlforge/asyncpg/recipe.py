@@ -6,7 +6,7 @@ from sqlforge.core import Config, Info, Pipeline, Recipe
 from sqlforge.loader import load
 
 from .generator import generate
-from .introspection import introspect
+from .introspection import introspect_queries
 from .transformer import transform
 
 
@@ -20,6 +20,6 @@ class APGRecipe(Recipe):
         return (
             Pipeline.start(load)
             .add(transform)
-            .add(partial(introspect, dsn=self.config.dsn))
+            .add(partial(introspect_queries, dsn=self.config.dsn))
             .add(generate)
         )

@@ -5,11 +5,23 @@ from asyncpg.prepared_stmt import PreparedStatement
 from asyncpg.types import Type
 
 from sqlforge.data import TransformedSQL, TypedSQL
+from sqlforge.postgres import PGPIntro
 
 from .utils import BUILTIN_SCALAR, BUILTIN_SCHEMA, TypeKind, array_boxed_type, get_connection
 
+# Data
 
-async def introspect(sqls: list[TransformedSQL], *, dsn: str) -> list[TypedSQL]:
+
+async def introspect_schema(conn: Connection):
+
+    intro = await PGPIntro.make(conn=conn)
+    return intro.introspect()
+
+
+# Query
+
+
+async def introspect_queries(sqls: list[TransformedSQL], *, dsn: str) -> list[TypedSQL]:
     async with get_connection(dsn) as conn:
         return [await _introspect_one(sql, conn) for sql in sqls]
 
