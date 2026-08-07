@@ -1,7 +1,7 @@
 from dataclasses import dataclass, replace
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class Text:
     _string: str
 
@@ -25,10 +25,10 @@ class Text:
 
 
 @dataclass(frozen=True)
-class StructGEN(Text):
+class StructText(Text):
     @classmethod
     def class_name(cls, name: str):
-        return cls(f"class {name.capitalize()}(Struct):\n")
+        return cls(f"class {camel_case(name)}(Struct):\n")
 
     def add_attribute(self, attr_name: str, attr_type: str):
         return self.indent().add(f"{attr_name}: {attr_type}").newline()
@@ -38,16 +38,20 @@ class StructGEN(Text):
 
 
 @dataclass(frozen=True)
-class EnumGEN(Text):
+class EnumText(Text):
     class_name: str
 
     @staticmethod
     def enum(class_name: str):
-        class_name = class_name.capitalize()
-        return EnumGEN(_string=f"class {class_name}(StrEnum):\n", class_name=class_name)
+        class_name = camel_case(class_name)
+        return EnumText(_string=f"class {class_name}(StrEnum):\n", class_name=class_name)
 
     def add_value(self, enum: str, enum_value: str):
         return self.indent().add(f"{enum.upper()}= '{enum_value}'").newline()
 
     def __repr__(self):
         return self._string
+
+
+def camel_case(s: str):
+    return "".join(w.capitalize() for w in s.split("_"))

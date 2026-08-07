@@ -3,7 +3,7 @@ from keyword import iskeyword
 
 from sqlglot import Expr, parse
 
-from sqlforge.data import SQL, QueryKind
+from sqlforge.datastruct import SQL, QueryKind
 
 from .core import Config, Info
 
@@ -21,7 +21,7 @@ META_PATTERN = re.compile(METADATA, re.VERBOSE)
 
 
 # impl
-def load(config: Config, info: Info):
+def load(config: Config, info: Info) -> list[SQL]:
     with open(config.path) as file:
         content = file.read()
         dialect = info["dialect"]
@@ -30,7 +30,7 @@ def load(config: Config, info: Info):
     return [load_query(sql, dialect) for sql in sqls if sql]
 
 
-def load_query(expr: Expr, dialect):
+def load_query(expr: Expr, dialect) -> SQL:
     target: Expr = expr.args.get("with_") or expr
 
     if not target.comments:

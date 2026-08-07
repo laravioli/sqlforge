@@ -10,7 +10,7 @@ import asyncpg
 
 
 @asynccontextmanager
-async def get_connection(dsn: str):
+async def get_conn(dsn: str):
     conn = await asyncpg.connect(dsn=dsn)
     try:
         yield cast(asyncpg.Connection, conn)
