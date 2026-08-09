@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
-from typing import Any, Literal
+from typing import Literal
 
 from sqlglot import Expr
 
@@ -50,8 +50,8 @@ class TransformedSQL(SQL):
 
 @dataclass(frozen=True)
 class TypedSQL(SQL):
-    typed_params: dict[str, Any]
-    # typed_attributes: dict[str,Any]
+    typed_params: dict[str, str]
+    typed_attrs: dict[str, str]
 
 
 @dataclass(frozen=True)

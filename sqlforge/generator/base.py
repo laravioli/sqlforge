@@ -1,5 +1,7 @@
 from dataclasses import dataclass, replace
 
+from .utils import camel_case
+
 
 @dataclass(frozen=True, repr=False)
 class Text:
@@ -51,7 +53,3 @@ class EnumText(Text):
 
     def __repr__(self):
         return self._string
-
-
-def camel_case(s: str):
-    return "".join(w.capitalize() for w in s.split("_"))

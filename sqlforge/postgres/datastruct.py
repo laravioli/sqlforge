@@ -1,9 +1,13 @@
-from enum import Enum
+from __future__ import annotations
+
+from enum import StrEnum
 from typing import Literal, TypedDict
 
-from msgspec import Struct
+from msgspec import Struct, convert
 
 type Oid = int
+type PGTypeRegister = dict[Oid, PGType]
+type PythonTypeRegister = dict[Oid, str]
 
 
 class TypeRecord(TypedDict):
@@ -28,51 +32,55 @@ class EnumRecord(TypedDict):
     values: list[str]
 
 
-class TypeKind(Enum):
-    BASE = b"b"
-    COMPOSITE = b"c"
-    DOMAIN = b"d"
-    ENUM = b"e"
-    PSEUDO_TYPE = b"p"
-    RANGE = b"r"
-    MULTI_RANGE = b"m"
+class TypeKind(StrEnum):
+    BASE = "b"
+    COMPOSITE = "c"
+    DOMAIN = "d"
+    ENUM = "e"
+    PSEUDO_TYPE = "p"
+    RANGE = "r"
+    MULTI_RANGE = "m"
 
 
 class PG_Attribute(Struct):
-    attr_type: Oid  # should be extracted with zip -> attrtypoids
+    attr_type: Oid
     name: str
     position: int
     not_null: bool
 
 
-class PG_Type(Struct):
+class PGType(Struct):
     oid: Oid
     ns: str
     name: str
-    kind: bytes  # TypeKind when msgspec fixed
+    kind: TypeKind
 
     elemtype: Literal[0] | Oid
-    elemtype_name: Literal["-"] | str
+
+    @property
+    def is_user_defined(self):
+        return self.ns not in ["pg_catalog", "information_schema"]
+
+    @classmethod
+    def convert(cls, rec: TypeRecord, **kwargs):
+        return convert(dict(rec) | kwargs, cls)
 
 
-class BaseType(PG_Type):
+class BaseType(PGType):
     pass
 
 
-class CompositeType(PG_Type):
-    # attrtypoids: list[Oid]
-    attributes: list[PG_Attribute]  # should be decoded first
+class RangeType(PGType):
+    range_subtype: int
 
 
-class DomainType(PG_Type):
-    basetype: Oid
-    basetype_name: str
+class CompositeType(PGType):
+    attributes: list[PG_Attribute]
 
 
-class EnumType(PG_Type):
+class DomainType(PGType):
+    basetype: Oid  # reference to the underlying type
+
+
+class EnumType(PGType):
     values: list[str]
-
-
-class RangeType(PG_Type):
-    range_subtype: Oid
-    range_subtype_name: str

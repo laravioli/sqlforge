@@ -127,16 +127,13 @@ AS (
         OR (tt.range_subtype IS NOT NULL AND ti.oid = tt.range_subtype)
         OR (tt.basetype IS NOT NULL AND ti.oid = tt.basetype)
 )
-
-SELECT DISTINCT
+SELECT DISTINCT ON (oid)
     *,
     basetype::regtype::text AS basetype_name,
     elemtype::regtype::text AS elemtype_name,
     range_subtype::regtype::text AS range_subtype_name
-FROM
-    typeinfo_tree
-ORDER BY
-    depth DESC
+FROM typeinfo_tree
+ORDER BY oid, depth DESC;
 """
 
 

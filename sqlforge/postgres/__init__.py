@@ -1,1 +1,1 @@
-from .forge import PgForge  # noqa: F401
+from .tools import PgTypeFetcher  # noqa: F401
