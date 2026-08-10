@@ -9,11 +9,11 @@ from sqlglot import exp
 from sqlforge.core import Config, Info, Recipe
 from sqlforge.datastruct import SQL, TransformedSQL, TypedSQL
 from sqlforge.loader import load
-from sqlforge.postgres import PgTypeFetcher
+from sqlforge.postgres import PgGenerator, PgTypeFetcher
 
 from .converter import PythonTypeConverter, PythonTypeRegister
 from .datastruct import PreparedSql
-from .utils import get_conn
+from .utils import get_conn, isidentifier
 
 
 @dataclass
@@ -29,7 +29,12 @@ class APGRecipe(Recipe):
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
         python_type_register = PythonTypeConverter(register=pg_type_register).convert()
-        return self._convert(prep_queries, python_type_register)
+        _ = self._convert(prep_queries, python_type_register)
+        return (
+            PgGenerator(pg_type_register, python_type_register).generate_file(),
+            pg_type_register,
+            python_type_register,
+        )
 
     @classmethod
     async def run(cls, cfg: Config):
@@ -74,6 +79,7 @@ def _transform_one(sql: SQL) -> TransformedSQL:
 
     for p in placeholders:
         if p.name not in params:
+            assert isidentifier(p.name)
             params[p.name] = param_nb
             param_nb += 1
         p.replace(

@@ -4,6 +4,7 @@ import ipaddress
 from dataclasses import dataclass
 from functools import singledispatchmethod
 from types import UnionType
+from typing import get_args
 from uuid import UUID
 
 import asyncpg
@@ -11,15 +12,23 @@ import asyncpg
 from sqlforge.generator.utils import camel_case
 from sqlforge.postgres.datastruct import *
 
+from .utils import isidentifier
 
-def type_name(t):
+
+def type_name(t) -> str:
     match t:
         case type():
-            return getattr(t, "__name__", str(t))
+            module = t.__module__
+            name = t.__qualname__
+
+            return name if module == "builtins" else f"{module}.{name}"
+
         case UnionType():
-            return t.__str__()
+            return " | ".join(type_name(arg) for arg in get_args(t))
+
         case str():
             return t
+
         case _:
             raise TypeError(f"Unsupported type: {t!r}")
 
@@ -92,10 +101,10 @@ class PythonTypeConverter:
     def _(self, t: BaseType):
         if t.name in PG_BASE_TYPE:
             return PG_BASE_TYPE[t.name]
-        elif t.name[0] == "_" and t.elemtype > 0:  # elemtype always > 0
+        elif t.elemtype > 0:
             elem = self.register[t.elemtype]
             return f"list[{self._to_python(elem)}]"
-        else:  # other postgres type like int2vector
+        else:
             return "Any"
 
     @_to_python.register
@@ -115,6 +124,7 @@ class PythonTypeConverter:
 
     @_to_python.register
     def _(self, t: CompositeType):
+        assert isidentifier(t.name)
         if t.is_user_defined:
             return camel_case(t.name)
         else:
@@ -122,6 +132,7 @@ class PythonTypeConverter:
 
     @_to_python.register
     def _(self, t: DomainType):
+        assert isidentifier(t.name)
         if t.is_user_defined:
             return camel_case(t.name)
         else:
@@ -129,6 +140,7 @@ class PythonTypeConverter:
 
     @_to_python.register
     def _(self, t: EnumType):
+        assert isidentifier(t.name)
         if t.is_user_defined:
             return camel_case(t.name)
         else:

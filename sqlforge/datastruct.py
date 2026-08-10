@@ -10,9 +10,12 @@ type SupportedDialect = Literal["postgres"]
 
 
 class QueryKind(StrEnum):
-    ONE = "one"
-    MANY = "many"
-    EXEC = "exec"
+    ONE = "one"  # fetchrow
+    MANY = "many"  # fetchmany
+    FETCH = "fetch"  # fetch
+    FETCHVAL = "fetchval"  # fetchval
+    EXEC = "exec"  # exec
+    EXECMANY = "execmany"  # execmany
 
 
 class ParamStyle(Enum):
