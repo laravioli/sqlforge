@@ -75,7 +75,7 @@ class PgTypeFetcher:
         return register
 
 
-class PgGenerator:
+class PgSchemaGenerator:
     def __init__(
         self,
         pg_reg: PGTypeRegister,
@@ -84,9 +84,9 @@ class PgGenerator:
         self.pg_reg = pg_reg
         self.python_reg = python_reg
 
-    def generate_file(self) -> Text:
+    def generate_schema(self) -> Text:
         txt = (
-            Text("")
+            Text()
             .import_("asyncpg")
             .import_("datetime")
             .import_("decimal")
@@ -111,16 +111,16 @@ class PgGenerator:
                     yield self._enum(pg_type)
 
     def _composite(self, composite: CompositeType):
-        txt = StructText.struct(composite.name)
+        txt = StructText(composite.name)
         for attr in composite.attributes:
             txt.add_attribute(attr.name, self.python_reg[attr.attr_type])
         return txt
 
     def _enum(self, enum: EnumType):
-        txt = EnumText.enum(enum.name)
+        txt = EnumText(enum.name)
         for value in enum.values:
             txt.add_value(value.upper(), value)
         return txt
 
     def _domain(self, domain: DomainType):
-        return DomainText.domain(domain.name, self.python_reg[domain.basetype])
+        return DomainText(domain.name, self.python_reg[domain.basetype])

@@ -31,7 +31,7 @@ FROM challenge ch LEFT OUTER JOIN user_base ub ON ch.sender_id = ub.id LEFT OUTE
 WHERE ch.sender_id = :user_id OR ch.receiver_id = :user_id
 ORDER BY ch.pub_date DESC;
 
---name: create_chall:exec
+--name: create_chall:execmany
 INSERT INTO challenge (challenge_id, sender_id, receiver_id, color_choice, color, time_control)
 VALUES (:chall_id,:sender_id,:receiver_id,:color_choice,:color,:time_control);
 
@@ -46,7 +46,7 @@ JOIN user_account uas ON n.sender_id = uas.id
 WHERE n.receiver_id = :receiver_id
 ORDER BY n.created_at DESC;
 
---name: unread_count:one
+--name: unread_count:fetchval
 SELECT count(*) AS unread_count
 FROM notification n
 WHERE n.receiver_id = :receiver_id
@@ -65,3 +65,17 @@ JOIN (
     WHERE friendship.receiver_id = :user_id AND friendship.status = :f_status) AS uf
 ON ua.id = uf.friend_id
 ORDER BY uf.last_update DESC;
+
+--name: accept_request:fetchmany
+WITH accepted_friendship AS (
+    UPDATE friendship f
+    SET status = 'accepted'
+    WHERE f.sender_id = :sender_id AND f.receiver_id = :receiver_id AND f.status = 'pending'
+    RETURNING f.receiver_id, f.sender_id, f.id
+), cleanup AS (
+    DELETE FROM notification n
+    USING accepted_friendship af
+    WHERE n.friendship_id = af.id AND n.type ='friend_request'
+)
+INSERT INTO notification (sender_id, receiver_id, friendship_id, type)
+SELECT receiver_id, sender_id, id, 'friend_request_accepted' FROM accepted_friendship;

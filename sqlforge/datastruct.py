@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
 from typing import Literal
 
+from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import Expr
 
 type SupportedDialect = Literal["postgres"]
@@ -11,8 +12,8 @@ type SupportedDialect = Literal["postgres"]
 
 class QueryKind(StrEnum):
     ONE = "one"  # fetchrow
-    MANY = "many"  # fetchmany
-    FETCH = "fetch"  # fetch
+    MANY = "many"  # fetch
+    FETCHMANY = "fetchmany"  # fetchmany
     FETCHVAL = "fetchval"  # fetchval
     EXEC = "exec"  # exec
     EXECMANY = "execmany"  # execmany
@@ -49,6 +50,12 @@ class SQL:
 @dataclass(frozen=True)
 class TransformedSQL(SQL):
     params: dict[str, int]
+
+
+@dataclass(frozen=True)
+class PreparedSQL(SQL):
+    params: dict[str, int]
+    prepared: PreparedStatement
 
 
 @dataclass(frozen=True)

@@ -7,12 +7,12 @@ from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import exp
 
 from sqlforge.core import Config, Info, Recipe
-from sqlforge.datastruct import SQL, TransformedSQL, TypedSQL
+from sqlforge.datastruct import SQL, PreparedSQL, TransformedSQL, TypedSQL
 from sqlforge.loader import load
-from sqlforge.postgres import PgGenerator, PgTypeFetcher
+from sqlforge.postgres import PgSchemaGenerator, PgTypeFetcher
 
 from .converter import PythonTypeConverter, PythonTypeRegister
-from .datastruct import PreparedSql
+from .generator import APGFnGenerator
 from .utils import get_conn, isidentifier
 
 
@@ -29,12 +29,13 @@ class APGRecipe(Recipe):
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
         python_type_register = PythonTypeConverter(register=pg_type_register).convert()
-        _ = self._convert(prep_queries, python_type_register)
-        return (
-            PgGenerator(pg_type_register, python_type_register).generate_file(),
-            pg_type_register,
-            python_type_register,
-        )
+        typed = self._convert(prep_queries, python_type_register)
+        return APGFnGenerator(sqls=typed).generate()
+        # return (
+        #     PgSchemaGenerator(pg_type_register, python_type_register).generate_schema(),
+        #     pg_type_register,
+        #     python_type_register,
+        # )
 
     @classmethod
     async def run(cls, cfg: Config):
@@ -50,18 +51,18 @@ class APGRecipe(Recipe):
 
     async def _prepare(self, sqls: list[TransformedSQL]):
         return [
-            PreparedSql(
+            PreparedSQL(
                 **sql.to_dict(), params=sql.params, prepared=await self.conn.prepare(str(sql))
             )
             for sql in sqls
         ]
 
-    def _convert(self, sqls: list[PreparedSql], reg: PythonTypeRegister) -> list[TypedSQL]:
+    def _convert(self, sqls: list[PreparedSQL], reg: PythonTypeRegister) -> list[TypedSQL]:
         return [_convert_one(sql, reg) for sql in sqls]
 
     # Utils
 
-    async def _get_type_register(self, stmts: list[PreparedSql]):
+    async def _get_type_register(self, stmts: list[PreparedSQL]):
         stmt_oids = get_stmt_oids(stmt.prepared for stmt in stmts)
         fetcher = PgTypeFetcher(self.conn)
         user_type_oids = await fetcher.get_user_oids()
@@ -111,7 +112,7 @@ def get_stmt_oids(stmts: Iterable[PreparedStatement]):
 # Convert
 
 
-def _convert_one(sql: PreparedSql, reg: PythonTypeRegister) -> TypedSQL:
+def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
     params = sql.params
     pparams = sql.prepared.get_parameters()
     pattrs = sql.prepared.get_attributes()

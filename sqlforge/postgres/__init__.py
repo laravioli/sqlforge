@@ -1,1 +1,1 @@
-from .tools import PgGenerator, PgTypeFetcher  # noqa: F401
+from .tools import PgSchemaGenerator, PgTypeFetcher  # noqa: F401

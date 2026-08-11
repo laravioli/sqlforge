@@ -1,18 +1,11 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Self
-
-from sqlforge.datastruct import QueryKind
-
 from .utils import camel_case
 
 
-@dataclass
 class Text:
-    _string: str
+    def __init__(self, string: str = ""):
+        self._string = string
 
     def add(self, string: str | Text):
         self._string += string if isinstance(string, str) else string._string
@@ -38,110 +31,87 @@ class Text:
         return self._string
 
 
-@dataclass
 class StructText(Text):
-    @classmethod
-    def struct(cls, name: str):
-        return cls(f"class {camel_case(name)}(Struct):\n")
+    def __init__(self, name: str):
+        self._string = f"class {camel_case(name)}(Struct):\n"
 
     def add_attribute(self, attr_name: str, attr_type: str):
         return self.indent().add(f"{attr_name}: {attr_type}").newline()
 
 
-@dataclass
 class EnumText(Text):
-    class_name: str
-
-    @classmethod
-    def enum(cls, class_name: str):
-        class_name = camel_case(class_name)
-        return cls(
-            f"class {class_name}(StrEnum):\n",
-            class_name=class_name,
-        )
+    def __init__(self, cls_name: str):
+        self._string = f"class {camel_case(cls_name)}(StrEnum):\n"
 
     def add_value(self, enum: str, enum_value: str):
         return self.indent().add(f"{enum.upper()} = '{enum_value}'").newline()
 
 
-@dataclass
 class DomainText(Text):
-    @classmethod
-    def domain(cls, name: str, python_type: str):
-        return cls(f"type {camel_case(name)} = {python_type}\n")
+    def __init__(self, name: str, python_type: str):
+        self._string = f"type {camel_case(name)} = {python_type}\n"
 
 
-@dataclass
-class FunctionParamText(Text):
-    @classmethod
-    def fn_param(cls, name: str, param_type: str):
-        return cls(f"({name}: {param_type}")
+class FnParamText(Text):
+    def __init__(self, name: str, param_type: str):
+        self._string = f"({name}: {param_type}"
 
     def add_param(self, name: str, param_type: str):
         self.add(f", {name.lower()}: {param_type}")
         return self
 
     def asterix(self):
-        self.add(", *,")
+        self.add(", *")
         return self
 
     def add_param_default(self, name: str, param_type: str, default: str):
         self.add(f", {name.lower()}: {param_type} = {default}")
         return self
 
-    def close(self):
+    def _close(self):
         self._string += ")"
         return self
 
 
-@dataclass
-class FunctionReturnText(Text, ABC):
-    kind: QueryKind
-    attrs: Sequence[str]
+class BodyText(Text):
+    def __init__(self, stmt: str = ""):
+        self._string = stmt + "\n" if stmt else ""
 
-    @classmethod
-    def fn_return(cls, kind: QueryKind, attribute_types: Sequence[str] = ()):
-        return cls(" -> ", kind=kind, attrs=attribute_types)
-
-    @abstractmethod
-    def one(self, *args, **kwargs) -> Self: ...
-
-    @abstractmethod
-    def many(self, *args, **kwargs) -> Self: ...
-
-    @abstractmethod
-    def fetch(self, *args, **kwargs) -> Self: ...
-
-    @abstractmethod
-    def fetchval(self, *args, **kwargs) -> Self: ...
-
-    @abstractmethod
-    def exec(self, *args, **kwargs) -> Self: ...
-
-    @abstractmethod
-    def execmany(self, *args, **kwargs) -> Self: ...
+    def add_statement(self, stmt: str | Text):
+        self.indent().add(stmt if isinstance(stmt, str) else stmt._string).newline()
+        return self
 
 
-@dataclass
-class FunctionText(Text):
-    param: FunctionParamText
-    body: Text
-    return_: FunctionReturnText
+class FnReturnText(Text):
+    def __init__(self):
+        self._string = " -> "
 
-    @classmethod
-    def function(
-        cls,
+
+class FnText(Text):
+    param: FnParamText
+    body: BodyText
+    return_: FnReturnText | None
+
+    def __init__(
+        self,
         name: str,
-        param: FunctionParamText,
-        body: Text,
-        return_: FunctionReturnText,
-        async_=True,  # gigachad
+        param: FnParamText,
+        body: BodyText,
+        return_: FnReturnText | None = None,
+        async_=True,
     ):
-        if async_:
-            kw = "async def "
-        else:
-            kw = "def "
-        return cls(f"{kw}{name}", param, body, return_)
+        self._string = f"{'async def ' if async_ else 'def'}{name}"
+        self.param = param
+        self.body = body
+        self.return_ = return_
 
-    def generate(self):
-        return self.add(self.param).add(self.return_).newline().add(self.body).newline()
+    def gen(self):
+        return (
+            self.add(self.param._close())
+            .add(self.return_ if self.return_ else "")
+            .add(":")
+            .newline()
+            .indent()
+            .add(self.body)
+            .newline()
+        )
