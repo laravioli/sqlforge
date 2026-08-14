@@ -18,12 +18,12 @@ class APGFnGenerator:
             .import_("uuid")
             .newline()
         )
-        for fn in self._sql_reader():
+        for fn in self._fn_writer():
             txt.add(fn).newline()
 
         return txt
 
-    def _sql_reader(self):
+    def _fn_writer(self):
         for sql in self.sqls:
             txt = (
                 Text(f'{sql.name.upper()} : typing.Final[str] = """{sql!s}"""').newline().newline()
@@ -54,9 +54,9 @@ class APGFnGenerator:
                 params.add_param(
                     "args", f"Iterable[tuple[{','.join(a for a in sql.typed_params.values())}]]"
                 ).asterix()
-        params.add_param_default("timeout", "float | None", "None")
+        params.add_param("timeout", "float | None", "None")
         if record_class:
-            params.add_param_default("record_class", "asyncpg.Record | None", "None")
+            params.add_param("record_class", "asyncpg.Record | None", "None")
         return params
 
     def _one(self, sql: TypedSQL):
@@ -80,7 +80,7 @@ class APGFnGenerator:
         return FnText(sql.name.lower(), params, body, return_).gen()
 
     def _fetchval(self, sql: TypedSQL):
-        params = self._build_params(sql, many=False, record_class=False).add_param_default(
+        params = self._build_params(sql, many=False, record_class=False).add_param(
             "column", f"Literal[{','.join(str(n) for n in range(len(sql.typed_attrs)))}]", "0"
         )
         body = (

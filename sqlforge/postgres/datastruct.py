@@ -42,11 +42,15 @@ class TypeKind(StrEnum):
     MULTI_RANGE = "m"
 
 
-class PG_Attribute(Struct):
+class PGAttribute(Struct):
     attr_type: Oid
     name: str
     position: int
     not_null: bool
+
+
+class PGColumnResult(Struct):
+    pass
 
 
 class PGType(Struct):
@@ -75,7 +79,7 @@ class RangeType(PGType):
 
 
 class CompositeType(PGType):
-    attributes: list[PG_Attribute]
+    attributes: list[PGAttribute]
 
 
 class DomainType(PGType):

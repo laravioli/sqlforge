@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from .utils import camel_case
 
+# Base
+
 
 class Text:
     def __init__(self, string: str = ""):
@@ -31,12 +33,20 @@ class Text:
         return self._string
 
 
+# Schema
+
+
 class StructText(Text):
     def __init__(self, name: str):
         self._string = f"class {camel_case(name)}(Struct):\n"
 
-    def add_attribute(self, attr_name: str, attr_type: str):
-        return self.indent().add(f"{attr_name}: {attr_type}").newline()
+    def add_attribute(self, attr_name: str, attr_type: str, default: str | None = None):
+        return (
+            self.indent()
+            .add(f"{attr_name}: {attr_type}")
+            .add(f" = {default}" if default else "")
+            .newline()
+        )
 
 
 class EnumText(Text):
@@ -52,20 +62,19 @@ class DomainText(Text):
         self._string = f"type {camel_case(name)} = {python_type}\n"
 
 
+# Functions
+
+
 class FnParamText(Text):
     def __init__(self, name: str, param_type: str):
         self._string = f"({name}: {param_type}"
 
-    def add_param(self, name: str, param_type: str):
-        self.add(f", {name.lower()}: {param_type}")
+    def add_param(self, name: str, param_type: str, default: str | None = None):
+        self.add(f", {name.lower()}: {param_type}").add(f" = {default}" if default else "")
         return self
 
     def asterix(self):
         self.add(", *")
-        return self
-
-    def add_param_default(self, name: str, param_type: str, default: str):
-        self.add(f", {name.lower()}: {param_type} = {default}")
         return self
 
     def _close(self):

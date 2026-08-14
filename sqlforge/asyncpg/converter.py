@@ -113,7 +113,7 @@ class PythonTypeConverter:
         pg_sub_type = self.register[t.range_subtype]
         assert not isinstance(pg_sub_type, RangeType)  # avoid infinite recursion
         python_sub_type = self._to_python(pg_sub_type)
-        base = f"tuple[{python_sub_type},{python_sub_type}]"
+        base = f"asyncpg.Range[{python_sub_type}]"
 
         if t.kind is TypeKind.RANGE:
             return base

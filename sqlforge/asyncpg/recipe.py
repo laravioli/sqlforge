@@ -30,12 +30,13 @@ class APGRecipe(Recipe):
         pg_type_register = await self._get_type_register(prep_queries)
         python_type_register = PythonTypeConverter(register=pg_type_register).convert()
         typed = self._convert(prep_queries, python_type_register)
-        return APGFnGenerator(sqls=typed).generate()
-        # return (
-        #     PgSchemaGenerator(pg_type_register, python_type_register).generate_schema(),
-        #     pg_type_register,
-        #     python_type_register,
-        # )
+        # return APGFnGenerator(sqls=typed).generate()
+        return (
+            PgSchemaGenerator(pg_type_register, python_type_register).generate_schema(),
+            pg_type_register,
+            python_type_register,
+            prep_queries,
+        )
 
     @classmethod
     async def run(cls, cfg: Config):
