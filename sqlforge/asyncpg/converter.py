@@ -1,7 +1,6 @@
 import datetime
 import decimal
 import ipaddress
-from dataclasses import dataclass
 from functools import singledispatchmethod
 from types import UnionType
 from typing import get_args
@@ -10,6 +9,7 @@ from uuid import UUID
 import asyncpg
 
 from sqlforge.generator.utils import camel_case
+from sqlforge.postgres import TypeConverter
 from sqlforge.postgres.datastruct import *
 
 from .utils import isidentifier
@@ -86,33 +86,27 @@ PG_BASE_TYPE: dict[str, str] = {
 }
 
 
-@dataclass(frozen=True)
-class PythonTypeConverter:
-    register: PGTypeRegister
-
-    def convert(self) -> PythonTypeRegister:
-        return {k: self._to_python(v) for k, v in self.register.items()}
-
+class PythonTypeConverter(TypeConverter):
     @singledispatchmethod
-    def _to_python(self, t: PGType) -> str:
+    def _convert(self, t: PGType) -> str:
         raise NotImplementedError()
 
-    @_to_python.register
+    @_convert.register
     def _(self, t: BaseType):
         if t.name in PG_BASE_TYPE:
             return PG_BASE_TYPE[t.name]
         elif t.elemtype > 0:
             elem = self.register[t.elemtype]
-            return f"list[{self._to_python(elem)}]"
+            return f"list[{self._convert(elem)}]"
         else:
             return "Any"
 
-    @_to_python.register
+    @_convert.register
     def _(self, t: RangeType):
 
         pg_sub_type = self.register[t.range_subtype]
         assert not isinstance(pg_sub_type, RangeType)  # avoid infinite recursion
-        python_sub_type = self._to_python(pg_sub_type)
+        python_sub_type = self._convert(pg_sub_type)
         base = f"asyncpg.Range[{python_sub_type}]"
 
         if t.kind is TypeKind.RANGE:
@@ -122,7 +116,7 @@ class PythonTypeConverter:
         else:
             return "Any"
 
-    @_to_python.register
+    @_convert.register
     def _(self, t: CompositeType):
         assert isidentifier(t.name)
         if t.is_user_defined:
@@ -130,7 +124,7 @@ class PythonTypeConverter:
         else:
             return "Any"
 
-    @_to_python.register
+    @_convert.register
     def _(self, t: DomainType):
         assert isidentifier(t.name)
         if t.is_user_defined:
@@ -138,7 +132,7 @@ class PythonTypeConverter:
         else:
             return "Any"
 
-    @_to_python.register
+    @_convert.register
     def _(self, t: EnumType):
         assert isidentifier(t.name)
         if t.is_user_defined:

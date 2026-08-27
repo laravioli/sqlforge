@@ -5,9 +5,11 @@ from typing import Literal, TypedDict
 
 from msgspec import Struct, convert
 
+from sqlforge.datastruct import PythonType
+
 type Oid = int
 type PGTypeRegister = dict[Oid, PGType]
-type PythonTypeRegister = dict[Oid, str]
+type PythonTypeRegister = dict[Oid, PythonType]
 
 
 class TypeRecord(TypedDict):

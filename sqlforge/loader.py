@@ -37,7 +37,7 @@ def load_query(expr: Expr, dialect) -> SQL:
         raise ValueError("Unable to find metadata")
 
     for com in target.comments:
-        if pattern := META_PATTERN.match(com.strip()):
+        if pattern := META_PATTERN.match(com.strip()):  # match the first meta_pattern
             groups = pattern.groupdict()
             name: str = groups["name"]
             validate_query_name(name)

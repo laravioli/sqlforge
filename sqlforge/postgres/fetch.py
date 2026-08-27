@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from typing import cast
 
@@ -11,17 +12,20 @@ from .stmt import LOOKUP_TYPES, TYPE_ENUM, USER_TYPE_OIDS
 ATTR_DECODER = Decoder(type=list[PGAttribute])
 
 
-class PgTypeFetcher:
+class PgFetcher:
     def __init__(self, conn: Connection):
         self._conn = conn
+        self._udf_oids: asyncio.Task[Sequence[Oid]] | None = None
 
-    async def fetch(self, oids: Sequence[int] = ()):
+    async def fetch_types(self, oids: Sequence[int] = ()):
         records = cast(list[TypeRecord], await self._conn.fetch(LOOKUP_TYPES, oids))
         enums = {r["type_name"]: r["values"] for r in await self._conn.fetch(TYPE_ENUM)}
         return self._convert_type_records(records, enums)
 
     async def get_user_oids(self):
-        return cast(Sequence[Oid], await self._conn.fetchval(USER_TYPE_OIDS))
+        if self._udf_oids is None:
+            self._udf_oids = asyncio.create_task(self._conn.fetchval(USER_TYPE_OIDS))
+        return await self._udf_oids
 
     def _convert_type_records(
         self, recs: list[TypeRecord], enums: dict[str, list[str]]

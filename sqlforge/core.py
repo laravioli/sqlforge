@@ -8,6 +8,15 @@ from typing import Any, ClassVar, Literal, TypedDict
 type Driver = Literal["asyncpg"]
 
 
+class Recipe(ABC):
+    config: Config
+    info: ClassVar[Info]
+
+    @classmethod
+    @abstractmethod
+    async def run(cls, cfg: Config) -> Any: ...
+
+
 @dataclass(frozen=True)
 class Config:
     path: Path
@@ -17,12 +26,3 @@ class Config:
 
 class Info(TypedDict):
     dialect: str
-
-
-class Recipe(ABC):
-    config: Config
-    info: ClassVar[Info]
-
-    @classmethod
-    @abstractmethod
-    async def run(cls, cfg: Config) -> Any: ...

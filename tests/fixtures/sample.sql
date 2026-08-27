@@ -1,8 +1,7 @@
 
 --name: select_user:one
-/* yolo*/
 SELECT ua.*
-FROM user_account AS ua /* yola */
+FROM user_account AS ua
 WHERE ua.id = :user_id;
 
 --name : update_notif : exec

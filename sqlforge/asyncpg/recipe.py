@@ -9,7 +9,7 @@ from sqlglot import exp
 from sqlforge.core import Config, Info, Recipe
 from sqlforge.datastruct import SQL, PreparedSQL, TransformedSQL, TypedSQL
 from sqlforge.loader import load
-from sqlforge.postgres import PgSchemaGenerator, PgTypeFetcher
+from sqlforge.postgres import PgFetcher, PgSchemaGenerator
 
 from .converter import PythonTypeConverter, PythonTypeRegister
 from .generator import APGFnGenerator
@@ -52,9 +52,7 @@ class APGRecipe(Recipe):
 
     async def _prepare(self, sqls: list[TransformedSQL]):
         return [
-            PreparedSQL(
-                **sql.to_dict(), params=sql.params, prepared=await self.conn.prepare(str(sql))
-            )
+            PreparedSQL(source=sql, prepared=await self.conn.prepare(str(sql.source)))
             for sql in sqls
         ]
 
@@ -65,10 +63,12 @@ class APGRecipe(Recipe):
 
     async def _get_type_register(self, stmts: list[PreparedSQL]):
         stmt_oids = get_stmt_oids(stmt.prepared for stmt in stmts)
-        fetcher = PgTypeFetcher(self.conn)
+        fetcher = PgFetcher(self.conn)
         user_type_oids = await fetcher.get_user_oids()
-        oids = stmt_oids | set(user_type_oids)
-        return await fetcher.fetch(list(oids))
+        oids = stmt_oids | set(
+            user_type_oids
+        )  # we combine stamement oids with introspected db oids
+        return await fetcher.fetch_types(list(oids))
 
 
 # Transform
@@ -93,7 +93,7 @@ def _transform_one(sql: SQL) -> TransformedSQL:
             )
         )
     return TransformedSQL(
-        **sql.to_dict(),
+        source=sql,
         params=params,
     )
 
@@ -102,6 +102,7 @@ def _transform_one(sql: SQL) -> TransformedSQL:
 
 
 def get_stmt_oids(stmts: Iterable[PreparedStatement]):
+    """Helper to get postgres type oids used in sql stamements"""
     return {
         oid
         for stmt in stmts
@@ -114,11 +115,11 @@ def get_stmt_oids(stmts: Iterable[PreparedStatement]):
 
 
 def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
-    params = sql.params
+    params = sql.source.params
     pparams = sql.prepared.get_parameters()
     pattrs = sql.prepared.get_attributes()
     return TypedSQL(
-        **sql.to_dict(),
+        source=sql.source.source,
         typed_params={p: reg[pp.oid] for p, pp in zip(params, pparams)},
         typed_attrs={attr.name: reg[attr.type.oid] for attr in pattrs},
     )

@@ -7,10 +7,6 @@ from sqlforge.asyncpg import APGRecipe
 from .core import Config
 
 
-class Book(TypedDict):
-    asyncpg: type[APGRecipe]
-
-
 class Blacksmith:
     def __init__(self, config: Config):
         self.config = config
@@ -21,3 +17,7 @@ class Blacksmith:
 
     def find_recipe(self):
         return self.book[self.config.driver]
+
+
+class Book(TypedDict):
+    asyncpg: type[APGRecipe]
