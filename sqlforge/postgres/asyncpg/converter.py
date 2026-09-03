@@ -9,9 +9,9 @@ from uuid import UUID
 import asyncpg
 
 from sqlforge.generator.utils import camel_case
-from sqlforge.postgres import TypeConverter
-from sqlforge.postgres.datastruct import *
 
+from ...postgres import TypeConverter
+from ..structures import *
 from .utils import isidentifier
 
 

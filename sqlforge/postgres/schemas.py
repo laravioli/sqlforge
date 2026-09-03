@@ -5,10 +5,11 @@ from typing import TypeGuard
 
 from sqlglot.schema import MappingSchema
 
-from ..converter import TypeConverter
-from ..datastruct import *
+from .converter import TypeConverter
+from .structures import *
 
 
+# helper class for sqlglot schema and nullability inference
 class SchemaGenerator:
     def __init__(self, register: PGTypeRegister):
         self._register = register
@@ -23,9 +24,10 @@ class SchemaGenerator:
         )
 
     def gen_one(self, comp: CompositeType):
-        conv = self._attr_converter
-        reg = self._register
-        return {attr.name: conv._convert(reg[attr.attr_type]) for attr in comp.attributes}
+        return {
+            attr.name: self._attr_converter._convert(self._register[attr.attr_type])
+            for attr in comp.attributes
+        }
 
 
 def is_composite(p: PGType) -> TypeGuard[CompositeType]:

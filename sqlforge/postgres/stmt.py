@@ -71,7 +71,7 @@ _TYPEINFO: typing.Final = """\
                                 'attr_type',   ia.atttypid::int,
                                 'name',        ia.attname,
                                 'position',    ia.attnum,
-                                'not_null',    ia.attnotnull
+                                'nullable',    NOT ia.attnotnull
                             )
                             ORDER BY ia.attnum
                         )

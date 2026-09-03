@@ -1,6 +1,6 @@
 from sqlforge.generator import DomainText, EnumText, StructText, Text
 
-from .datastruct import *
+from .structures import *
 
 
 class PgSchemaGenerator:
@@ -43,10 +43,10 @@ class PgSchemaGenerator:
         for attr in composite.attributes:
             attr_type = (
                 self.python_reg[attr.attr_type]
-                if attr.not_null
+                if not attr.nullable
                 else self.python_reg[attr.attr_type] + " | None"
             )
-            attr_default = "" if attr.not_null else "None"
+            attr_default = "" if not attr.nullable else "None"
             txt.add_attribute(attr.name, attr_type, attr_default)
         return txt
 

@@ -3,9 +3,7 @@ from keyword import iskeyword
 
 from sqlglot import Expr, parse
 
-from sqlforge.datastruct import SQL, QueryKind
-
-from .core import Config, Info
+from .structures import SQL, Config, Info, QueryKind
 
 # Regex Metadata
 

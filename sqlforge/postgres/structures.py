@@ -5,7 +5,7 @@ from typing import Literal, TypedDict
 
 from msgspec import Struct, convert
 
-from sqlforge.datastruct import PythonType
+from sqlforge.core.structures import PythonType
 
 type Oid = int
 type PGTypeRegister = dict[Oid, PGType]
@@ -48,7 +48,7 @@ class PGAttribute(Struct):
     attr_type: Oid
     name: str
     position: int
-    not_null: bool
+    nullable: bool
 
 
 class PGColumnResult(Struct):

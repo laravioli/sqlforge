@@ -6,18 +6,25 @@ from asyncpg import Connection
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import exp
 
-from sqlforge.core import Config, Info, Recipe
-from sqlforge.datastruct import SQL, PreparedSQL, TransformedSQL, TypedSQL
-from sqlforge.loader import load
-from sqlforge.postgres import PgFetcher, PgSchemaGenerator
+from sqlforge.core.loader import load
+from sqlforge.core.structures import (
+    SQL,
+    Config,
+    Info,
+    PreparedSQL,
+    Recipe,
+    TransformedSQL,
+    TypedSQL,
+)
 
+from ...postgres import PgFetcher, PgSchemaGenerator
 from .converter import PythonTypeConverter, PythonTypeRegister
 from .generator import APGFnGenerator
 from .utils import get_conn, isidentifier
 
 
 @dataclass
-class APGRecipe(Recipe):
+class AsyncPGRecipe(Recipe):
     info: ClassVar[Info] = {"dialect": "postgres"}
     config: Config
     conn: Connection

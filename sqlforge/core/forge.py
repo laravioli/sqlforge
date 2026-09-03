@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from sqlforge.asyncpg import APGRecipe
-
-from .core import Config
+from .recipe import AsyncPGRecipe
+from .structures import Config
 
 
 class Blacksmith:
     def __init__(self, config: Config):
         self.config = config
-        self.book = Book(asyncpg=APGRecipe)
+        self.book = Book(asyncpg=AsyncPGRecipe)
 
     async def forge(self):
         return await self.find_recipe().run(self.config)
@@ -20,4 +19,4 @@ class Blacksmith:
 
 
 class Book(TypedDict):
-    asyncpg: type[APGRecipe]
+    asyncpg: type[AsyncPGRecipe]

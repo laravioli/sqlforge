@@ -1,4 +1,4 @@
-from sqlforge.datastruct import QueryKind, TypedSQL
+from sqlforge.core.structures import QueryKind, TypedSQL
 from sqlforge.generator import BodyText, FnParamText, FnReturnText, FnText, Text
 
 

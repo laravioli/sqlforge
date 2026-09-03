@@ -5,9 +5,19 @@ from typing import cast
 from asyncpg import Connection
 from msgspec.json import Decoder
 
-from .datastruct import *
-from .datastruct import PGAttribute
 from .stmt import LOOKUP_TYPES, TYPE_ENUM, USER_TYPE_OIDS
+from .structures import (
+    BaseType,
+    CompositeType,
+    DomainType,
+    EnumType,
+    Oid,
+    PGAttribute,
+    PGTypeRegister,
+    RangeType,
+    TypeKind,
+    TypeRecord,
+)
 
 ATTR_DECODER = Decoder(type=list[PGAttribute])
 

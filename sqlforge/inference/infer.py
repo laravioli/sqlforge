@@ -2,7 +2,6 @@ from enum import Enum, auto
 
 
 class Nullability(Enum):
-    NULL = auto()
     NON_NULL = auto()
     NULLABLE = auto()
     UNKNOWN = auto()

@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from enum import Enum, StrEnum, auto
-from typing import Literal
+from pathlib import Path
+from typing import Any, ClassVar, Literal, TypedDict
 
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import Expr
+
+# Receipe
+
+type Driver = Literal["asyncpg"]
+
+
+class Recipe(ABC):
+    config: Config
+    info: ClassVar[Info]
+
+    @classmethod
+    @abstractmethod
+    async def run(cls, cfg: Config) -> Any: ...
+
+
+@dataclass(frozen=True)
+class Config:
+    path: Path
+    dsn: str  # postgres://user:password@host:port/db
+    driver: Driver
+
+
+class Info(TypedDict):
+    dialect: str
+
+
+# SQL
 
 
 class ParamStyle(Enum):
