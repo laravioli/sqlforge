@@ -3,31 +3,35 @@ from __future__ import annotations
 from functools import singledispatchmethod
 from typing import TypeGuard
 
+from sqlglot.expressions.datatypes import DataType
 from sqlglot.schema import MappingSchema
 
 from .converter import TypeConverter
 from .structures import *
 
 
-# helper class for sqlglot schema and nullability inference
+# TODO: handle namespace prefix
 class SchemaGenerator:
     def __init__(self, register: PGTypeRegister):
         self._register = register
         self._attr_converter = AttrTypeConverter(register=register)
 
     def gen(self) -> MappingSchema:
-        # NOTE we'll feed sqlglot with all user defined composite-type
-        # NOTE not sure if its right tho
-        composites = filter(is_composite, self._register.values())
-        return MappingSchema(
-            schema={t.name: self.gen_one(t) for t in composites}, dialect="postgres"
-        )
+        mapping = {}
+        for rel_type in filter(is_composite, self._register.values()):
+            relation = self.gen_one(rel_type)
+            mapping[rel_type.name] = relation
 
-    def gen_one(self, comp: CompositeType):
-        return {
-            attr.name: self._attr_converter._convert(self._register[attr.attr_type])
-            for attr in comp.attributes
-        }
+        return MappingSchema(schema=mapping, dialect="postgres")
+
+    def gen_one(self, rel_type: CompositeType):
+        relation: dict[str, DataType] = {}
+        for attr in rel_type.attributes:
+            attr_name = attr.name
+            dt = DataType.build(self._attr_converter._convert(self._register[attr.attr_type]))
+            dt.set("nullable", attr.nullable)
+            relation[attr_name] = dt
+        return relation
 
 
 def is_composite(p: PGType) -> TypeGuard[CompositeType]:

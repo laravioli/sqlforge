@@ -39,10 +39,10 @@ class AsyncPGRecipe(Recipe):
         typed = self._convert(prep_queries, python_type_register)
         # return APGFnGenerator(sqls=typed).generate()
         return (
+            [query.source for query in queries],
             PgSchemaGenerator(pg_type_register, python_type_register).generate_schema(),
             pg_type_register,
             python_type_register,
-            prep_queries,
         )
 
     @classmethod
@@ -130,3 +130,6 @@ def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
         typed_params={p: reg[pp.oid] for p, pp in zip(params, pparams)},
         typed_attrs={attr.name: reg[attr.type.oid] for attr in pattrs},
     )
+
+
+# Infer Null

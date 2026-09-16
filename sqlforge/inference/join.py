@@ -1,14 +1,21 @@
+# inspired by:
+# Outerjoin Simplication and Reordering
+# for Query Optimization
+# Cesar A. Galindo-Legaria
+# and
+# Arnon Rosenthal
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import reduce
 from typing import cast
 
 from sqlglot import exp
-from sqlglot.optimizer.scope import Scope
+
+from .expression import SqlBool
 
 # Join
 
@@ -23,7 +30,7 @@ class JoinKind(StrEnum):
     ANTI = "ANTI"
 
 
-def join_kind(join: exp.Join):
+def _join_kind(join: exp.Join):
     kind = join.kind
     side = join.side
 
@@ -36,7 +43,7 @@ def join_kind(join: exp.Join):
         return JoinKind.INNER if is_inner else JoinKind.CROSS
 
 
-def join_null_extend(join_kind: JoinKind) -> tuple[bool, bool]:
+def _join_null_extend(join_kind: JoinKind) -> tuple[bool, bool]:
     match join_kind:
         case JoinKind.LEFT:
             return False, True
@@ -54,17 +61,35 @@ def join_null_extend(join_kind: JoinKind) -> tuple[bool, bool]:
 @dataclass
 class Predicate:
     expression: exp.Expr
+    infer: Callable[[exp.Expr], frozenset[SqlBool]]
     _reject_cache: dict[frozenset[str], bool] = field(default_factory=dict)
 
     def null_reject(self, sources: frozenset[str]) -> bool:
         res = self._reject_cache.get(sources)
         if res is None:
-            res = self._reject_cache[sources] = self._resolve_null_reject(sources)
+            res = self._reject_cache[sources] = self._null_reject_sources(sources)
         return res
 
-    def _resolve_null_reject(self, sources: frozenset[str]):
-        # NOTE its enough to reject on any element in sources
-        return True
+    def _null_reject_sources(self, sources: frozenset[str]):
+        """
+        We say a predicate `p rejects nulls` in attribute set `A` if it evaluates
+        to FALSE or UNKNOWN on every tuple in which all attributes in `A` are null
+        so consider a null tuple of sources
+
+        Returns:
+            True if predicate cannot be True
+            False if predicate can be True
+        """
+        pred = cast(
+            exp.Predicate,
+            self.expression.transform(
+                lambda node: (
+                    exp.Null() if (isinstance(node, exp.Column) and node.table in sources) else node
+                ),
+                copy=True,
+            ),
+        )
+        return SqlBool.TRUE not in self.infer(pred)
 
 
 @dataclass
@@ -115,55 +140,55 @@ class LeafNode:
 type TreeNode = LeafNode | JoinNode
 
 
-def build_node(expression: exp.Expr) -> TreeNode:
+def _make_builder(infer_predicate: Callable[[exp.Expr], frozenset[SqlBool]]):
+    def _build_node(expression: exp.Expr) -> TreeNode:
 
-    # get the left side
-    left: TreeNode
+        # get the left side
+        left: TreeNode
 
-    match expression:
-        case exp.Select():
-            from_ = cast(exp.From | None, expression.args.get("from_"))
-            if not from_:
-                raise ValueError("there is no join to infer")
-            left = build_node(from_.this)
-        case exp.Subquery():
-            if bool(expression.alias or isinstance(expression.this, exp.UNWRAPPED_QUERIES)):
-                left = LeafNode(table=expression)  # for now we assume the dt is resolved
-            else:
-                # recurse until we found a table or derived table
-                left = build_node(expression.this)
-        case exp.Table():
-            left = LeafNode(table=expression)
-        case _:
-            raise ValueError("unhandled case")
+        match expression:
+            case exp.Select():
+                from_ = cast(exp.From, expression.args.get("from_"))
+                left = _build_node(from_.this)
+            case exp.Subquery():
+                if bool(expression.alias or isinstance(expression.this, exp.UNWRAPPED_QUERIES)):
+                    left = LeafNode(table=expression)
+                else:
+                    # recurse until we found a table or derived table
+                    left = _build_node(expression.this)
+            case exp.Table():
+                left = LeafNode(table=expression)
+            case _:
+                raise NotImplementedError()
 
-    # eventually join with the right side
-    joins = cast(Iterable[exp.Join] | None, expression.args.get("joins"))
-    if not joins:
-        return left
+        # eventually join with the right side
+        joins = cast(Iterable[exp.Join] | None, expression.args.get("joins"))
+        if not joins:
+            return left
 
-    return reduce(
-        _lambda_reduce,
-        joins,
-        left,
-    )
+        return reduce(
+            _lambda_reduce,
+            joins,
+            left,
+        )
 
+    def _lambda_reduce(left: TreeNode, join: exp.Join) -> TreeNode:
+        # NOTE: USING and NATURAL are rewritten by sqlglot as ON clause
+        on = join.args.get("on")
+        kind = _join_kind(join)
+        right = _build_node(join.this)
 
-def _lambda_reduce(left: TreeNode, join: exp.Join) -> TreeNode:
+        return JoinNode(
+            kind=kind,
+            null_extend=_join_null_extend(kind),
+            left_sources=_get_join_sources(left),
+            right_sources=_get_join_sources(right),
+            predicate=Predicate(expression=on, infer=infer_predicate) if on else None,
+            left=left,
+            right=right,
+        )
 
-    on = join.args.get("on")
-    kind = join_kind(join)
-    right = build_node(join.this)
-
-    return JoinNode(
-        kind=kind,
-        null_extend=join_null_extend(kind),
-        left_sources=_get_join_sources(left),
-        right_sources=_get_join_sources(right),
-        predicate=Predicate(on) if on else None,
-        left=left,
-        right=right,
-    )
+    return _build_node
 
 
 def _get_join_sources(node: TreeNode):
@@ -176,7 +201,7 @@ def _get_join_sources(node: TreeNode):
     # Simplify
 
 
-def simplify(tree: JoinNode) -> None:
+def _simplify_tree(tree: JoinNode) -> None:
     """
     Traverse the tree and transform it in a simplified version,
     wich is equivalent to compute predicate null-effect on the query
@@ -211,21 +236,21 @@ def simplify(tree: JoinNode) -> None:
                     case _:
                         continue
 
-                op2.null_extend = join_null_extend(op2.kind)
+                op2.null_extend = _join_null_extend(op2.kind)
 
 
 # Resolve
 
 
 @dataclass
-class JoinInference:
+class JoinNullability:
     _infered: defaultdict[str, bool]
 
     def is_null_extended(self, alias_or_name: str):
         return self._infered[alias_or_name]  # could raise KeyError
 
 
-def resolve_null_extension(tree: JoinNode):
+def _resolve_null_extension(tree: JoinNode):
     null_extensions: dict[str, bool] = defaultdict(lambda: False)
 
     for node in tree.find_all(JoinNode):
@@ -237,14 +262,24 @@ def resolve_null_extension(tree: JoinNode):
     return null_extensions
 
 
-def infer_joins(scope: Scope):
-    # TODO write shortcut logic
-    tree = cast(JoinNode, build_node(scope.expression))
-    simplify(tree)
-    return JoinInference(_infered=resolve_null_extension(tree))
+@dataclass(frozen=True)
+class JoinInference:
+    infer_predicate: Callable[[exp.Expr], frozenset[SqlBool]]
 
+    def infer(self, expression: exp.Expr):
+        """
+        Use outerjoin simplification heuristic to infer joins nullability
+        """
+        joins = expression.args.get("joins")
+        if not joins:
+            return None
 
-# NOTE first phase: shortcut -> should i bypass the whole thing and how ?
-# (for exemple check if there is top level lateral, if there is a from clause, if there is join even)
-# should use a scoped version probably
-# NOTE second phase (optional) -> do the whole inference
+        builder = _make_builder(self.infer_predicate)
+        try:
+            tree = cast(JoinNode, builder(expression))
+        except NotImplementedError:
+            return JoinNullability(_infered=defaultdict(lambda: True))
+
+        _simplify_tree(tree)
+
+        return JoinNullability(_infered=_resolve_null_extension(tree))

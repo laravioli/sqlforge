@@ -4,6 +4,12 @@ SELECT ua.*
 FROM user_account AS ua
 WHERE ua.id = :user_id;
 
+--name: select_username:one
+SELECT ua.username as nickname
+FROM user_account ua
+WHERE ua.id = :user_id;
+
+
 --name : update_notif : exec
 UPDATE notification n
 SET "read" = true
