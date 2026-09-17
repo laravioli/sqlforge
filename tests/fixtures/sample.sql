@@ -9,6 +9,11 @@ SELECT ua.username as nickname
 FROM user_account ua
 WHERE ua.id = :user_id;
 
+-- name: by_id_full_user :one
+SELECT ua.*, up AS preference
+FROM user_account ua join user_preference up ON ua.id = up.user_id
+WHERE ua.id = $1;
+
 
 --name : update_notif : exec
 UPDATE notification n

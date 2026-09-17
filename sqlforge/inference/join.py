@@ -15,7 +15,7 @@ from typing import cast
 
 from sqlglot import exp
 
-from .expression import SqlBool
+from .lattice import Boolean, BooleanSet
 
 # Join
 
@@ -61,7 +61,7 @@ def _join_null_extend(join_kind: JoinKind) -> tuple[bool, bool]:
 @dataclass
 class Predicate:
     expression: exp.Expr
-    infer: Callable[[exp.Expr], frozenset[SqlBool]]
+    infer: Callable[[exp.Expr], BooleanSet]
     _reject_cache: dict[frozenset[str], bool] = field(default_factory=dict)
 
     def null_reject(self, sources: frozenset[str]) -> bool:
@@ -89,7 +89,7 @@ class Predicate:
                 copy=True,
             ),
         )
-        return SqlBool.TRUE not in self.infer(pred)
+        return Boolean.TRUE not in self.infer(pred).value
 
 
 @dataclass
@@ -140,7 +140,7 @@ class LeafNode:
 type TreeNode = LeafNode | JoinNode
 
 
-def _make_builder(infer_predicate: Callable[[exp.Expr], frozenset[SqlBool]]):
+def _make_builder(infer_predicate: Callable[[exp.Expr], BooleanSet]):
     def _build_node(expression: exp.Expr) -> TreeNode:
 
         # get the left side
@@ -264,7 +264,7 @@ def _resolve_null_extension(tree: JoinNode):
 
 @dataclass(frozen=True)
 class JoinInference:
-    infer_predicate: Callable[[exp.Expr], frozenset[SqlBool]]
+    infer_predicate: Callable[[exp.Expr], BooleanSet]
 
     def infer(self, expression: exp.Expr):
         """

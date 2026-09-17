@@ -6,8 +6,8 @@ from sqlforge.core.structures import SQL
 from sqlforge.postgres.schemas import SchemaGenerator
 from sqlforge.postgres.structures import PGTypeRegister
 
-from .enums import Nullability
 from .infer import ScopedSQL
+from .lattice import NullSet
 
 
 @dataclass(frozen=True)
@@ -23,19 +23,34 @@ class Engine:
         self.schema = SchemaGenerator(register=type_register).gen()
 
     def infer(self, queries: list[SQL]):
+        nb = len(queries)
+        counter = 1
         output: list[InferredSQL] = []
         for query in queries:
+            inferred = None
             try:
-                output.append(self.infer_one(query))
+                inferred = self.infer_one(query)
+                output.append(inferred)
             except Exception as e:  # noqa: BLE001
-                print(e, query, "\n")
+                print(e)
+            finally:
+                print(f"{counter} / {nb}")
+                # print(query)
+                if inferred:
+                    print(inferred.nullable)
+                # print("\n")
+                counter += 1
+
         return output
 
     def infer_one(self, query: SQL):
         return InferredSQL(
-            source=query, nullable=transform_null(ScopedSQL.make(query, self.schema).infer())
+            source=query,
+            nullable=transform_null(
+                ScopedSQL.make(query, self.schema, full_optimize=False).infer()
+            ),
         )
 
 
-def transform_null(null: dict[str, Nullability]) -> dict[str, bool]:
+def transform_null(null: dict[str, NullSet]) -> dict[str, bool]:
     return {k: bool(v) for k, v in null.items()}

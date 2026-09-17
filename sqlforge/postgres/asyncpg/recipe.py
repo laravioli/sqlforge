@@ -16,6 +16,7 @@ from sqlforge.core.structures import (
     TransformedSQL,
     TypedSQL,
 )
+from sqlforge.inference import Engine
 
 from ...postgres import PgFetcher, PgSchemaGenerator
 from .converter import PythonTypeConverter, PythonTypeRegister
@@ -32,15 +33,15 @@ class AsyncPGRecipe(Recipe):
     # Main
 
     async def pipeline(self):
-        queries = self._transform(load(self.config, self.info))
+        inputs = load(self.config, self.info)
+        queries = self._transform(inputs)
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
         python_type_register = PythonTypeConverter(register=pg_type_register).convert()
         typed = self._convert(prep_queries, python_type_register)
         # return APGFnGenerator(sqls=typed).generate()
         return (
-            [query.source for query in queries],
-            PgSchemaGenerator(pg_type_register, python_type_register).generate_schema(),
+            inputs,
             pg_type_register,
             python_type_register,
         )
