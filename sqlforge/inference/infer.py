@@ -18,6 +18,7 @@ from .join import JoinInference, JoinNullability
 from .lattice import NullSet
 
 
+# TODO : chain of union/intersect/except(use | & -, columns wise, in the correct order) then ctes
 @dataclass(init=False)
 class ScopedSQL:
     scope: Scope
@@ -25,7 +26,7 @@ class ScopedSQL:
     expr_inference: ExprInference
     join_inference: JoinInference
     join_nullability: JoinNullability | None
-    dt_nullability: dict[tuple[int, str], dict[str, NullSet]]
+    dt_nullability: dict[tuple[int, str], dict[str, NullSet]]  # shared
 
     def __init__(
         self,
@@ -43,8 +44,10 @@ class ScopedSQL:
         self.dt_nullability = dt_nullability or {}
 
     @staticmethod
-    def make(sql: SQL, schema: MappingSchema, full_optimize=False):
-        expression = sql.expr.copy()
+    def root(sql: SQL, schema: MappingSchema, full_optimize=False):
+        expression = sql.expr.copy().unnest()
+        # NOTE: maybe root should not make it (None) when i dont infer
+        # NOTE: i need somewhere, where i decide ok i dont need/have to infer this
         dialect = sql.dialect
         ast = (
             optimize(expression, schema=schema, dialect=dialect)
@@ -64,35 +67,56 @@ class ScopedSQL:
         )
         return ScopedSQL(scope=scope, user_schema=schema)
 
-    def replace_scope(self, scope: Scope):
+    def infer_inner_scope(self, scope: Scope):
+        """
+        Enter a new, inner scope using a copy of `ScopedSQL`(sharing user-schema and derived-table inference)
+        then infer the scoped expression
+        """
         return ScopedSQL(
             scope=scope,
-            user_schema=self.user_schema,
-            dt_nullability=self.dt_nullability,
-        )
+            user_schema=self.user_schema,  # read-only
+            dt_nullability=self.dt_nullability,  # mutable
+        ).infer()
 
     def infer(self) -> dict[str, NullSet]:
+        """
+        main, recursive, nullability inference algorithm
+        """
+        current_expr = self.scope.expression
+
+        # resolve set operations
+        if isinstance(current_expr, exp.SetOperation):
+            l_out = self.infer_inner_scope(scope=self.scope.union_scopes[0])
+            r_out = self.infer_inner_scope(scope=self.scope.union_scopes[1])
+            match current_expr:
+                case exp.Union():
+                    return {k1: v1 | v2 for (k1, v1), (_, v2) in zip(l_out.items(), r_out.items())}
+                case exp.Intersect():
+                    # https://github.com/tobymao/sqlglot/issues/8390
+                    return {k1: v1 & v2 for (k1, v1), (_, v2) in zip(l_out.items(), r_out.items())}
+                case exp.Except():
+                    return {k1: v1 - v2 for (k1, v1), (_, v2) in zip(l_out.items(), r_out.items())}
+
         # resolve derived tables
         for name, scope in self.scope.sources.items():
             if scope in self.scope.derived_table_scopes:
-                scoped_sql = self.replace_scope(scope=scope)
-                self.dt_nullability[id(self.scope), name] = (
-                    scoped_sql.infer()
-                )  # check weither scope can be gc'ed
-        # resolve joins
-        self.join_nullability = self.join_inference.infer(self.scope.expression)
-        # resolve select
-        output = {}
-        for expression in cast(list[exp.Expr], self.scope.expression.expressions):
-            output[expression.alias_or_name] = self.expr_inference.infer_nullability(expression)
+                self.dt_nullability[id(self.scope), name] = self.infer_inner_scope(scope=scope)
 
-        return output
+        # resolve joins
+        self.join_nullability = self.join_inference.infer(current_expr)
+
+        # resolve select
+        return {
+            e.alias_or_name: self.expr_inference.infer_nullability(e)
+            for e in cast(list[exp.Expr], current_expr.expressions)
+        }
 
     def _get_column_nullability(self, expression: exp.Column) -> NullSet:
         """
+        Given a scope, use user-table and derived table sources result.
+        Join results modify the nullability after join inference.
         Returns:
-                nullability of `col`, use current scope for derived tables and join inference
-
+                nullability of `col`
         """
 
         table = expression.table

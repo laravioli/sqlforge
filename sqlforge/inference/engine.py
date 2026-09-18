@@ -47,7 +47,7 @@ class Engine:
         return InferredSQL(
             source=query,
             nullable=transform_null(
-                ScopedSQL.make(query, self.schema, full_optimize=False).infer()
+                ScopedSQL.root(query, self.schema, full_optimize=False).infer()
             ),
         )
 

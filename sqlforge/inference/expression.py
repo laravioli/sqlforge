@@ -28,7 +28,7 @@ class SimplificationError(Exception):
 NON_NULL_CONSTANT = (exp.Literal, exp.Boolean)
 CONSTANT = (*NON_NULL_CONSTANT, exp.Null)
 
-BOOLEAN_EXPRESSION = (exp.Predicate, exp.Connector, exp.Boolean)
+BOOLEAN_EXPRESSION = (exp.Predicate, exp.Connector, exp.Boolean, exp.Not)
 
 
 # Although COALESCE, GREATEST, and LEAST are syntactically similar to functions, they are
@@ -47,7 +47,7 @@ def is_non_null_constant(expression: exp.Expr) -> bool:
     return isinstance(expression, NON_NULL_CONSTANT) or extract_date(expression) is not None
 
 
-def is_boolean(expression: exp.Expr):
+def is_boolean_expr(expression: exp.Expr):
     return isinstance(expression, BOOLEAN_EXPRESSION)
 
 
@@ -109,7 +109,10 @@ class ExprInference:
             case _ if is_non_null_constant(expression):
                 return NullSet.NON_NULL
 
-            case _ if is_boolean(expression):
+            case exp.Count():
+                return NullSet.NON_NULL
+
+            case _ if is_boolean_expr(expression):
                 return self.infer_boolean_expr(expression).to_nullset()
 
             case exp.Subquery():
@@ -143,13 +146,13 @@ class ExprInference:
                 )
 
             case exp.NullSafeEQ(this=left, expression=right):
-                return _is_distinct_from_operator(
+                return _is_not_distinct_from_operator(
                     self.infer_nullability(left), self.infer_nullability(right)
                 )
 
             case exp.NullSafeNEQ(this=left, expression=right):
                 return ~(
-                    _is_distinct_from_operator(
+                    _is_not_distinct_from_operator(
                         self.infer_nullability(left), self.infer_nullability(right)
                     )
                 )
@@ -213,7 +216,7 @@ def _comparison_operator(left: NullSet, right: NullSet):
             return BooleanSet.TRUE_OR_FALSE
 
 
-def _is_distinct_from_operator(left: NullSet, right: NullSet):
+def _is_not_distinct_from_operator(left: NullSet, right: NullSet):
     match (left, right):
         case (NullSet.NULL, NullSet.NULL):
             return BooleanSet.TRUE
