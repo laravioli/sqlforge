@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from sqlglot import exp
@@ -14,18 +14,15 @@ from sqlglot.schema import MappingSchema
 from sqlforge.core.structures import SQL
 
 from .expression import ExprInference
-from .join import JoinInference, JoinNullability
+from .join import JoinNotInferred, infer_joins
 from .lattice import NullSet
 
 
-# TODO : chain of union/intersect/except(use | & -, columns wise, in the correct order) then ctes
 @dataclass(init=False)
 class ScopedSQL:
     scope: Scope
     user_schema: MappingSchema
     expr_inference: ExprInference
-    join_inference: JoinInference
-    join_nullability: JoinNullability | None
     dt_nullability: dict[tuple[int, str], dict[str, NullSet]]  # shared
 
     def __init__(
@@ -36,12 +33,12 @@ class ScopedSQL:
     ):
         self.scope = scope
         self.user_schema = user_schema
-        self.expr_inference = ExprInference(
-            self._get_column_nullability, self._get_table_column_nullability
+
+        expr_inference = ExprInference(
+            scope=scope, infer_column=self._get_column_nullability, join_modifier={}
         )
-        self.join_inference = JoinInference(self.expr_inference.infer_boolean_expr)
-        self.join_nullability = None
-        self.dt_nullability = dt_nullability or {}
+        self.expr_inference = expr_inference
+        self.dt_nullability = {} if dt_nullability is None else dt_nullability
 
     @staticmethod
     def root(sql: SQL, schema: MappingSchema, full_optimize=False):
@@ -67,17 +64,6 @@ class ScopedSQL:
         )
         return ScopedSQL(scope=scope, user_schema=schema)
 
-    def infer_inner_scope(self, scope: Scope):
-        """
-        Enter a new, inner scope using a copy of `ScopedSQL`(sharing user-schema and derived-table inference)
-        then infer the scoped expression
-        """
-        return ScopedSQL(
-            scope=scope,
-            user_schema=self.user_schema,  # read-only
-            dt_nullability=self.dt_nullability,  # mutable
-        ).infer()
-
     def infer(self) -> dict[str, NullSet]:
         """
         main, recursive, nullability inference algorithm
@@ -86,8 +72,8 @@ class ScopedSQL:
 
         # resolve set operations
         if isinstance(current_expr, exp.SetOperation):
-            l_out = self.infer_inner_scope(scope=self.scope.union_scopes[0])
-            r_out = self.infer_inner_scope(scope=self.scope.union_scopes[1])
+            l_out = self._infer_inner_scope(scope=self.scope.union_scopes[0])
+            r_out = self._infer_inner_scope(scope=self.scope.union_scopes[1])
             match current_expr:
                 case exp.Union():
                     return {k1: v1 | v2 for (k1, v1), (_, v2) in zip(l_out.items(), r_out.items())}
@@ -100,30 +86,35 @@ class ScopedSQL:
         # resolve derived tables
         for name, scope in self.scope.sources.items():
             if scope in self.scope.derived_table_scopes:
-                self.dt_nullability[id(self.scope), name] = self.infer_inner_scope(scope=scope)
+                self.dt_nullability[id(self.scope), name] = self._infer_inner_scope(scope=scope)
 
         # resolve joins
-        self.join_nullability = self.join_inference.infer(current_expr)
+        try:
+            join_modifier = infer_joins(current_expr, self.expr_inference)
+        except JoinNotInferred:
+            join_modifier = {k: NullSet.MAYBE_NULL for k in self.scope.sources}
 
+        expr_inference = replace(self.expr_inference, join_modifier=join_modifier)
         # resolve select
         return {
-            e.alias_or_name: self.expr_inference.infer_nullability(e)
+            e.alias_or_name: expr_inference.infer_nullability(e)
             for e in cast(list[exp.Expr], current_expr.expressions)
         }
 
+    def _infer_inner_scope(self, scope: Scope):
+        """
+        Enter a new, inner scope using a copy of `ScopedSQL`(sharing user-schema and derived-table inference)
+        then infer the scoped expression
+        """
+        return ScopedSQL(
+            scope=scope,
+            user_schema=self.user_schema,  # read-only
+            dt_nullability=self.dt_nullability,  # mutable
+        ).infer()
+
     def _get_column_nullability(self, expression: exp.Column) -> NullSet:
-        """
-        Given a scope, use user-table and derived table sources result.
-        Join results modify the nullability after join inference.
-        Returns:
-                nullability of `col`
-        """
 
         table = expression.table
-
-        if self.join_nullability and self.join_nullability.is_null_extended(table):
-            return NullSet.MAYBE_NULL
-
         source = self.scope.sources.get(table)
         match source:
             case exp.Table():
@@ -136,12 +127,5 @@ class ScopedSQL:
                     return self.dt_nullability[(id(self.scope), table)][expression.name]
                 return NullSet.MAYBE_NULL
 
-            case None:
-                # NOTE: it is not clear yet if qualify make this impossible
-                raise ValueError()
-
-    def _get_table_column_nullability(self, expression: exp.TableColumn) -> NullSet:
-        assert self.join_nullability is not None
-        if self.join_nullability.is_null_extended(expression.name):
-            return NullSet.MAYBE_NULL
-        return NullSet.NON_NULL
+            case _:
+                return NullSet.MAYBE_NULL

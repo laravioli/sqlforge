@@ -6,18 +6,22 @@
 # Arnon Rosenthal
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import reduce
 from typing import cast
 
 from sqlglot import exp
 
-from .lattice import Boolean, BooleanSet
+from .expression import ExprInference
+from .lattice import Boolean, NullSet
 
 # Join
+
+
+class JoinNotInferred(Exception):
+    pass
 
 
 class JoinKind(StrEnum):
@@ -26,8 +30,6 @@ class JoinKind(StrEnum):
     LEFT = "LEFT"
     RIGHT = "RIGHT"
     FULL = "FULL"
-    SEMI = "SEMI"
-    ANTI = "ANTI"
 
 
 def _join_kind(join: exp.Join):
@@ -43,59 +45,34 @@ def _join_kind(join: exp.Join):
         return JoinKind.INNER if is_inner else JoinKind.CROSS
 
 
-def _join_null_extend(join_kind: JoinKind) -> tuple[bool, bool]:
-    match join_kind:
-        case JoinKind.LEFT:
-            return False, True
-        case JoinKind.RIGHT:
-            return True, False
-        case JoinKind.FULL:
-            return True, True
-        case _:
-            return False, False
-
-
 # Tree
 
 
-@dataclass
+@dataclass(frozen=True)
 class Predicate:
-    expression: exp.Expr
-    infer: Callable[[exp.Expr], BooleanSet]
-    _reject_cache: dict[frozenset[str], bool] = field(default_factory=dict)
+    _infer: ExprInference  # initial expression inference
+    expression: exp.Predicate | exp.Connector | exp.Boolean | exp.Not
 
-    def null_reject(self, sources: frozenset[str]) -> bool:
-        res = self._reject_cache.get(sources)
-        if res is None:
-            res = self._reject_cache[sources] = self._null_reject_sources(sources)
-        return res
-
-    def _null_reject_sources(self, sources: frozenset[str]):
+    def null_reject(self, join_modifier: dict[str, NullSet]):
         """
         We say a predicate `p rejects nulls` in attribute set `A` if it evaluates
         to FALSE or UNKNOWN on every tuple in which all attributes in `A` are null
         so consider a null tuple of sources
 
+        Parameters:
+                join_modifier: mapping to determine null tuples and current join null-extension
+
         Returns:
             True if predicate cannot be True
             False if predicate can be True
         """
-        pred = cast(
-            exp.Predicate,
-            self.expression.transform(
-                lambda node: (
-                    exp.Null() if (isinstance(node, exp.Column) and node.table in sources) else node
-                ),
-                copy=True,
-            ),
-        )
-        return Boolean.TRUE not in self.infer(pred).value
+        infer = replace(self._infer, join_modifier=join_modifier)
+        return Boolean.TRUE not in infer.infer_boolean(self.expression).value
 
 
 @dataclass
 class JoinNode:
-    kind: JoinKind
-    null_extend: tuple[bool, bool]
+    kind: JoinKind  # mutable
     left_sources: frozenset[str]
     right_sources: frozenset[str]
     predicate: Predicate | None
@@ -104,6 +81,18 @@ class JoinNode:
 
     def __post_init__(self):
         assert self.kind != JoinKind.CROSS or self.predicate is None
+
+    @property
+    def null_extend(self):
+        match self.kind:
+            case JoinKind.LEFT:
+                return False, True
+            case JoinKind.RIGHT:
+                return True, False
+            case JoinKind.FULL:
+                return True, True
+            case _:
+                return False, False
 
     def walk(self, exclude_root=False) -> Iterator[TreeNode]:
         stack: list[TreeNode] = [self] if not exclude_root else [self.right, self.left]
@@ -114,22 +103,47 @@ class JoinNode:
             if isinstance(node, JoinNode):
                 stack.extend([node.right, node.left])
 
-    def find_all[T](self, *expression_types: type[T], exclude_root: bool = False) -> Iterator[T]:
-        for expression in self.walk(exclude_root=exclude_root):
+    def find_all[T](self, *expression_types: type[T], exclude_self: bool = False) -> Iterator[T]:
+        for expression in self.walk(exclude_root=exclude_self):
             if isinstance(expression, expression_types):
                 yield expression
 
     def null_reject(self, sources: frozenset[str]) -> bool:
+        """Test operator null-rejection on attribute set `sources`"""
         assert self.predicate is not None
         match self.kind:
             case JoinKind.FULL:
                 return False
             case JoinKind.LEFT:
-                return sources.issubset(self.right_sources) and self.predicate.null_reject(sources)
+                return sources.issubset(self.right_sources) and self.predicate.null_reject(
+                    self._join_modifier(sources)
+                )
             case JoinKind.RIGHT:
-                return sources.issubset(self.left_sources) and self.predicate.null_reject(sources)
+                return sources.issubset(self.left_sources) and self.predicate.null_reject(
+                    self._join_modifier(sources)
+                )
             case _:
-                return self.predicate.null_reject(sources)
+                return self.predicate.null_reject(self._join_modifier(sources))
+
+    def _join_modifier(self, sources: frozenset[str]):
+        return self.resolve_null_extension(exclude_self=True) | {k: NullSet.NULL for k in sources}
+
+    def resolve_null_extension(self: JoinNode, exclude_self=False):
+        """
+        Does sources (user_table and derived table)
+        from left and right side are null-extended ?
+        Returns:
+            Mapping `source_name` -> `null-extended`
+        """
+        null_extensions: dict[str, bool] = {}
+
+        for node in self.find_all(JoinNode, exclude_self=exclude_self):
+            for t in node.left_sources:
+                null_extensions[t] = null_extensions.get(t, False) or node.null_extend[0]
+            for t in node.right_sources:
+                null_extensions[t] = null_extensions.get(t, False) or node.null_extend[1]
+
+        return {k: NullSet.MAYBE_NULL for k, v in null_extensions.items() if v}
 
 
 @dataclass(frozen=True)
@@ -140,7 +154,7 @@ class LeafNode:
 type TreeNode = LeafNode | JoinNode
 
 
-def _make_builder(infer_predicate: Callable[[exp.Expr], BooleanSet]):
+def _make_builder(infer: ExprInference):
     def _build_node(expression: exp.Expr) -> TreeNode:
 
         # get the left side
@@ -159,7 +173,7 @@ def _make_builder(infer_predicate: Callable[[exp.Expr], BooleanSet]):
             case exp.Table():
                 left = LeafNode(table=expression)
             case _:
-                raise NotImplementedError()
+                raise JoinNotInferred
 
         # eventually join with the right side
         joins = cast(Iterable[exp.Join] | None, expression.args.get("joins"))
@@ -180,10 +194,9 @@ def _make_builder(infer_predicate: Callable[[exp.Expr], BooleanSet]):
 
         return JoinNode(
             kind=kind,
-            null_extend=_join_null_extend(kind),
             left_sources=_get_join_sources(left),
             right_sources=_get_join_sources(right),
-            predicate=Predicate(expression=on, infer=infer_predicate) if on else None,
+            predicate=Predicate(_infer=infer, expression=on) if on else None,
             left=left,
             right=right,
         )
@@ -214,7 +227,7 @@ def _simplify_tree(tree: JoinNode) -> None:
     """
     for op1 in tree.find_all(JoinNode):
         if op1.kind is not JoinKind.CROSS:
-            for op2 in op1.find_all(JoinNode, exclude_root=True):
+            for op2 in op1.find_all(JoinNode, exclude_self=True):
                 match op2.kind:
                     case JoinKind.LEFT:
                         if op1.null_reject(op2.right_sources):
@@ -236,50 +249,25 @@ def _simplify_tree(tree: JoinNode) -> None:
                     case _:
                         continue
 
-                op2.null_extend = _join_null_extend(op2.kind)
-
 
 # Resolve
 
 
-@dataclass
-class JoinNullability:
-    _infered: defaultdict[str, bool]
+def infer_joins(expression: exp.Expr, infer: ExprInference) -> dict[str, NullSet]:
+    """
+    Use outerjoin simplification heuristic to infer joins nullability
+    """
+    joins = expression.args.get("joins")
+    if not joins:
+        return {}
 
-    def is_null_extended(self, alias_or_name: str):
-        return self._infered[alias_or_name]  # could raise KeyError
+    builder = _make_builder(infer)
+    tree = cast(JoinNode, builder(expression))
 
-
-def _resolve_null_extension(tree: JoinNode):
-    null_extensions: dict[str, bool] = defaultdict(lambda: False)
-
-    for node in tree.find_all(JoinNode):
-        for table_name in node.left_sources:
-            null_extensions[table_name] |= node.null_extend[0]
-        for table_name in node.right_sources:
-            null_extensions[table_name] |= node.null_extend[1]
-
-    return null_extensions
-
-
-@dataclass(frozen=True)
-class JoinInference:
-    infer_predicate: Callable[[exp.Expr], BooleanSet]
-
-    def infer(self, expression: exp.Expr):
-        """
-        Use outerjoin simplification heuristic to infer joins nullability
-        """
-        joins = expression.args.get("joins")
-        if not joins:
-            return None
-
-        builder = _make_builder(self.infer_predicate)
-        try:
-            tree = cast(JoinNode, builder(expression))
-        except NotImplementedError:
-            return JoinNullability(_infered=defaultdict(lambda: True))
-
+    _kinds = lambda: tuple(n.kind for n in tree.find_all(JoinNode))
+    prev = None
+    while (cur := _kinds()) != prev:
+        prev = cur
         _simplify_tree(tree)
 
-        return JoinNullability(_infered=_resolve_null_extension(tree))
+    return tree.resolve_null_extension()
