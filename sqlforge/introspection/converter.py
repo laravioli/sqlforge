@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from functools import singledispatchmethod
 
-from sqlforge.postgres.structures import *
+from sqlforge.introspection.structures import *
 
 
 class TypeConverter(ABC):

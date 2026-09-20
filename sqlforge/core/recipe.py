@@ -1,1 +1,1 @@
-from sqlforge.postgres.asyncpg import AsyncPGRecipe  # noqa: F401
+from sqlforge.core.asyncpg import AsyncPGRecipe  # noqa: F401

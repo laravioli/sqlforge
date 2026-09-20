@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from sqlglot.schema import MappingSchema
 
 from sqlforge.core.structures import SQL
-from sqlforge.postgres.schemas import SchemaGenerator
-from sqlforge.postgres.structures import PGTypeRegister
+from sqlforge.introspection.schemas import SchemaGenerator
+from sqlforge.introspection.structures import PGTypeRegister
 
 from .infer import ScopedSQL
 from .lattice import NullSet

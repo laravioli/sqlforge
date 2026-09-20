@@ -123,6 +123,9 @@ class ExprInference:
             case exp.Subquery():
                 return NullSet.MAYBE_NULL
 
+            case exp.Coalesce():
+                return NullSet.MAYBE_NULL
+
             case _ if is_row(expression):
                 # TODO: postgresql doc 9.2
                 return NullSet.MAYBE_NULL
