@@ -31,18 +31,20 @@ class JoinKind(StrEnum):
     RIGHT = "RIGHT"
     FULL = "FULL"
 
+    @staticmethod
+    def from_expr(join: exp.Join):
+        kind = join.kind
+        side = join.side
 
-def _join_kind(join: exp.Join):
-    kind = join.kind
-    side = join.side
-
-    if side:
-        return JoinKind(side)
-    elif kind:
-        return JoinKind(kind)
-    else:
-        is_inner = bool(join.args.get("on") or join.args.get("using") or join.method == "NATURAL")
-        return JoinKind.INNER if is_inner else JoinKind.CROSS
+        if side:
+            return JoinKind(side)
+        elif kind:
+            return JoinKind(kind)
+        else:
+            is_inner = bool(
+                join.args.get("on") or join.args.get("using") or join.method == "NATURAL"
+            )
+            return JoinKind.INNER if is_inner else JoinKind.CROSS
 
 
 # Tree
@@ -94,8 +96,8 @@ class JoinNode:
             case _:
                 return False, False
 
-    def walk(self, exclude_root=False) -> Iterator[TreeNode]:
-        stack: list[TreeNode] = [self] if not exclude_root else [self.right, self.left]
+    def walk(self, exclude_self: bool = False) -> Iterator[TreeNode]:
+        stack: list[TreeNode] = [self] if not exclude_self else [self.right, self.left]
 
         while stack:
             node = stack.pop()
@@ -104,7 +106,7 @@ class JoinNode:
                 stack.extend([node.right, node.left])
 
     def find_all[T](self, *expression_types: type[T], exclude_self: bool = False) -> Iterator[T]:
-        for expression in self.walk(exclude_root=exclude_self):
+        for expression in self.walk(exclude_self=exclude_self):
             if isinstance(expression, expression_types):
                 yield expression
 
@@ -126,6 +128,14 @@ class JoinNode:
                 return self.predicate.null_reject(self._join_modifier(sources))
 
     def _join_modifier(self, sources: frozenset[str]):
+        """
+        Compute null-extension of operands and union it with sources null tuple.
+
+        Note: this deviates from Galindo-Legaria & Rosenthal, where null-rejection
+        is tested on the predicate alone. Here the null-extension already produced
+        by the operands is also taken into account.
+        """
+
         return self.resolve_null_extension(exclude_self=True) | {k: NullSet.NULL for k in sources}
 
     def resolve_null_extension(self: JoinNode, exclude_self=False):
@@ -189,7 +199,7 @@ def _make_builder(infer: ExprInference):
     def _lambda_reduce(left: TreeNode, join: exp.Join) -> TreeNode:
         # NOTE: USING and NATURAL are rewritten by sqlglot as ON clause
         on = join.args.get("on")
-        kind = _join_kind(join)
+        kind = JoinKind.from_expr(join)
         right = _build_node(join.this)
 
         return JoinNode(
@@ -211,10 +221,11 @@ def _get_join_sources(node: TreeNode):
         else frozenset(node.left_sources | node.right_sources)
     )
 
-    # Simplify
+
+# Simplify
 
 
-def _simplify_tree(tree: JoinNode) -> None:
+def _simplify_tree(tree: JoinNode) -> bool:
     """
     Traverse the tree and transform it in a simplified version,
     wich is equivalent to compute predicate null-effect on the query
@@ -223,31 +234,38 @@ def _simplify_tree(tree: JoinNode) -> None:
         tree: join tree computed from a sql ast expression
 
     Returns:
-        None, the tree is modified in place
+        `True` if at least one join kind was changed else `False`
     """
+    modified = False
+
     for op1 in tree.find_all(JoinNode):
-        if op1.kind is not JoinKind.CROSS:
-            for op2 in op1.find_all(JoinNode, exclude_self=True):
-                match op2.kind:
-                    case JoinKind.LEFT:
-                        if op1.null_reject(op2.right_sources):
-                            op2.kind = JoinKind.INNER
-                    case JoinKind.RIGHT:
-                        if op1.null_reject(op2.left_sources):
-                            op2.kind = JoinKind.INNER
+        if op1.kind is JoinKind.CROSS:
+            continue
+        for op2 in op1.find_all(JoinNode, exclude_self=True):
+            match op2.kind:
+                case JoinKind.LEFT:
+                    if op1.null_reject(op2.right_sources):
+                        modified = True
+                        op2.kind = JoinKind.INNER
+                case JoinKind.RIGHT:
+                    if op1.null_reject(op2.left_sources):
+                        modified = True
+                        op2.kind = JoinKind.INNER
 
-                    case JoinKind.FULL:
-                        n1 = op1.null_reject(op2.right_sources)
-                        n2 = op1.null_reject(op2.left_sources)
+                case JoinKind.FULL:
+                    n1 = op1.null_reject(op2.right_sources)
+                    n2 = op1.null_reject(op2.left_sources)
 
+                    if n1 or n2:
+                        modified = True
                         if n1 and n2:
                             op2.kind = JoinKind.INNER
                         elif n1:
                             op2.kind = JoinKind.RIGHT
-                        elif n2:
+                        else:
                             op2.kind = JoinKind.LEFT
-                    case _:
-                        continue
+
+    return modified
 
 
 # Resolve
@@ -264,10 +282,7 @@ def infer_joins(expression: exp.Expr, infer: ExprInference) -> dict[str, NullSet
     builder = _make_builder(infer)
     tree = cast(JoinNode, builder(expression))
 
-    _kinds = lambda: tuple(n.kind for n in tree.find_all(JoinNode))
-    prev = None
-    while (cur := _kinds()) != prev:
-        prev = cur
-        _simplify_tree(tree)
+    while _simplify_tree(tree):
+        pass
 
     return tree.resolve_null_extension()
