@@ -38,7 +38,9 @@ class ScopedSQL:
         self.scope = scope
         self.user_schema = user_schema
         self.expr_inference = ExprInference(_infer_column=self._column_nullability)
-        self.join_inference = JoinInference(_infer_boolean=self.expr_inference.infer_boolean)
+        self.join_inference = JoinInference(
+            infer_boolean=self.expr_inference.infer_boolean, expression=self.scope.expression
+        )
         self.null_sources = {}
 
     @staticmethod
@@ -101,7 +103,7 @@ class ScopedSQL:
 
         # resolve joins
         try:
-            self.join_inference.infer(scope_expression)
+            self.join_inference.infer()
         except JoinNotInferred:
             raise NotImplementedError
 

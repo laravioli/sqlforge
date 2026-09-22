@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from functools import reduce
 from typing import cast
 
 from sqlglot import exp
 
-from .exception import JoinNotInferred
+from .exception import JoinNotInferred, NoFromClause
 from .lattice import BooleanSet, NullSet
 
 # Join
@@ -86,7 +86,7 @@ class JoinNode:
         left_sources: frozenset[str],
         right_sources: frozenset[str],
         expression: exp.Expr | None,
-        modify: Callable[[dict[str, NullSet]], None],
+        set_modifier: Callable[[dict[str, NullSet]], None],
         infer: Callable[[exp.Expr], BooleanSet],
     ):
         self.kind = kind
@@ -102,7 +102,7 @@ class JoinNode:
             assert isinstance(expression, exp.Predicate | exp.Connector | exp.Boolean | exp.Not)
 
             def infer_boolean(predicate: exp.Expr, sources: frozenset[str]):
-                modify(
+                set_modifier(
                     self.resolve_null_extension(exclude_self=True)
                     | {k: NullSet.NULL for k in sources}
                 )
@@ -140,10 +140,9 @@ class JoinNode:
         """Test operator null-rejection on attribute set `sources`"""
         assert self.predicate is not None
 
-        if self.kind is JoinKind.FULL:
-            return False
-
         match self.kind:
+            case JoinKind.FULL:
+                return False
             case JoinKind.LEFT:
                 return sources.issubset(self.right_sources) and self.predicate.null_reject(sources)
             case JoinKind.RIGHT:
@@ -179,7 +178,7 @@ type TreeNode = LeafNode | JoinNode
 
 def _make_builder(
     infer_boolean: Callable[[exp.Expr], BooleanSet],
-    modify: Callable[[dict[str, NullSet]], None],
+    set_modifier: Callable[[dict[str, NullSet]], None],
 ):
     def _build_node(expression: exp.Expr) -> TreeNode:
 
@@ -188,7 +187,9 @@ def _make_builder(
 
         match expression:
             case exp.Select():
-                from_ = cast(exp.From, expression.args.get("from_"))
+                from_ = cast(exp.From | None, expression.args.get("from_"))
+                if from_ is None:
+                    raise NoFromClause()
                 left = _build_node(from_.this)
             case exp.Table():
                 left = LeafNode(source=expression)
@@ -231,7 +232,7 @@ def _make_builder(
             right_sources=_get_join_sources(right),
             expression=on,
             infer=infer_boolean,
-            modify=modify,
+            set_modifier=set_modifier,
         )
 
     return _build_node
@@ -294,42 +295,39 @@ def _simplify_tree(tree: JoinNode) -> bool:
 # Resolve
 
 
-@dataclass
 class JoinInference:
-    _infer_boolean: Callable[[exp.Expr], BooleanSet]
-    _tree: TreeNode | None = field(init=False, default=None)
-    _modifier: JoinModifier = field(init=False, default_factory=dict)
-    # only _simplify_tree and infer change _modifier
+    def __init__(self, infer_boolean: Callable[[exp.Expr], BooleanSet], expression: exp.Expr):
+        self._modifier: JoinModifier = {}
+
+        from_clause = cast(exp.From | None, expression.args.get("from_"))
+        if from_clause:
+            self._tree = _make_builder(infer_boolean, self._set_modifier)(expression)
+            match self._tree:
+                case LeafNode():
+                    self.ordered_sources = [self._tree.source.alias_or_name]
+                case JoinNode():
+                    self.ordered_sources = [
+                        n.source.alias_or_name for n in self._tree.walk() if isinstance(n, LeafNode)
+                    ]
+        else:
+            self._tree = None
+            self.ordered_sources = []
 
     @property
     def null_extension(self):
         return self._modifier
 
-    @property
-    def ordered_sources(self):
-        assert self._tree is not None
-        match self._tree:
-            case LeafNode():
-                return [self._tree.source.alias_or_name]
-            case JoinNode():
-                return [
-                    n.source.alias_or_name for n in self._tree.walk() if isinstance(n, LeafNode)
-                ]
-
-    def _modify(self, modif: JoinModifier):
+    def _set_modifier(self, modif: JoinModifier):
+        # A dangerous part of the design.
+        # This allow the resolution of on clause
+        # using the simplification algorithm
         self._modifier = modif
 
-    def infer(self, expression: exp.Expr) -> None:
+    def infer(self) -> None:
         """
         Use outerjoin simplification heuristic to infer joins nullability.
         """
-        build = _make_builder(self._infer_boolean, self._modify)
-        self._tree = build(expression)
-
-        joins = expression.args.get("joins")
-        if joins is not None:
-            assert isinstance(self._tree, JoinNode)
+        if isinstance(self._tree, JoinNode):
             while _simplify_tree(self._tree):  # fixed-point
                 pass
-
             self._modifier = self._tree.resolve_null_extension()
