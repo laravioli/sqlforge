@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlglot.schema import MappingSchema
@@ -15,7 +16,7 @@ from .lattice import NullSet
 @dataclass(frozen=True)
 class InferredSQL:
     source: SQL
-    nullable: dict[str, NullSet]
+    nullable: Sequence[tuple[str, NullSet]]
 
 
 # TODO consider the impact of parameters nullability (in select column its obvious : select $1)
@@ -51,5 +52,5 @@ class Engine:
     def infer_one(self, query: SQL):
         return InferredSQL(
             source=query,
-            nullable=ScopedSQL.root(query, self.schema, full_optimize=False).infer(),
+            nullable=ScopedSQL.root(query, self.schema, full_optimize=False).infer().unwrap(),
         )

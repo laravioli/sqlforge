@@ -1,3 +1,6 @@
+# The goal is to be sound by using local over-approximation
+# See Static Program Analysis by Møller and Schwartzbach
+# Abstract Interpretation
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -8,6 +11,7 @@ from sqlglot import exp
 from sqlglot.optimizer.scope import Scope
 from sqlglot.optimizer.simplify import extract_date
 
+from .exception import SimplificationError, StarNotExpanded
 from .lattice import Boolean, BooleanSet, NullSet
 
 # 5. COALESCE
@@ -16,10 +20,6 @@ from .lattice import Boolean, BooleanSet, NullSet
 # 8. Aggregates
 # 9. UNION
 # 10. Dialect-specific functions
-
-
-class SimplificationError(Exception):
-    pass
 
 
 # ╔══════════════════════════════════════╗
@@ -83,6 +83,10 @@ def is_row(expression: exp.Expr) -> bool:
 # ╚══════════════════════════════════════╝
 
 
+def extend(base: NullSet, extended: NullSet | None) -> NullSet:
+    return extended if extended is not None else base
+
+
 @dataclass(frozen=True)
 class ExprInference:
     scope: Scope
@@ -123,19 +127,39 @@ class ExprInference:
             case exp.Subquery():
                 return NullSet.MAYBE_NULL
 
-            case exp.Coalesce():
-                return NullSet.MAYBE_NULL
+            case exp.Coalesce(this=head, expressions=tail):
+                return self._infer_coalesce([head, *tail])
 
             case _ if is_row(expression):
                 # TODO: postgresql doc 9.2
                 return NullSet.MAYBE_NULL
 
+            case exp.Star():
+                raise StarNotExpanded()
+
             case _:
                 return NullSet.MAYBE_NULL
 
     def _null_extended(self, table: str):
+        """
+        Used during join inference (incrementaly) and select list inference.
+        The pattern is to return a new ExprInference instance when join_modifier change
+        """
         if table in self.scope.sources:
             return self.join_modifier.get(table)
+
+    def _infer_coalesce(self, expressions: list[exp.Expr]) -> NullSet:
+        result = NullSet.NULL
+        for e in expressions:
+            match self.infer_nullability(e):
+                case NullSet.NON_NULL:
+                    return NullSet.NON_NULL
+                case NullSet.MAYBE_NULL:
+                    result = NullSet.MAYBE_NULL
+        return result
+
+    def _infer_greatest(self) -> NullSet:
+        return NullSet.MAYBE_NULL
 
     def infer_boolean(self, expression: exp.Expr) -> BooleanSet:
         """what are the possible outcomes of this boolean expression ?"""
@@ -153,27 +177,27 @@ class ExprInference:
                 return ~self.infer_boolean(this)
 
             case exp.Expr(this=left, expression=right) if is_comparison_operator(expression):
-                return _comparison_operator(
+                return _infer_comparison_operator(
                     self.infer_nullability(left), self.infer_nullability(right)
                 )
 
             case exp.NullSafeEQ(this=left, expression=right):
-                return _is_not_distinct_from_operator(
+                return _infer_distinct_operator(
                     self.infer_nullability(left), self.infer_nullability(right)
                 )
 
             case exp.NullSafeNEQ(this=left, expression=right):
                 return ~(
-                    _is_not_distinct_from_operator(
+                    _infer_distinct_operator(
                         self.infer_nullability(left), self.infer_nullability(right)
                     )
                 )
 
             case exp.Is():
-                return self._is_expression(expression)
+                return self._infer_is(expression)
 
             case _ if is_subquery_predicate(expression):
-                return _subquery_predicate(expression)
+                return _infer_subquery_predicate(expression)
 
             case exp.Boolean(this=this):
                 return BooleanSet.TRUE if this else BooleanSet.FALSE
@@ -197,7 +221,7 @@ class ExprInference:
         """
         return Boolean.UNKNOWN
 
-    def _is_expression(self, expression: exp.Is):
+    def _infer_is(self, expression: exp.Is) -> BooleanSet:
         negate = bool(expression.args.get("negate"))
         right = expression.right.unnest()
         match right:
@@ -228,7 +252,7 @@ IS_BOOLEAN_TABLE = {
 }
 
 
-def _comparison_operator(left: NullSet, right: NullSet):
+def _infer_comparison_operator(left: NullSet, right: NullSet):
     match (left, right):
         case (NullSet.NULL, _) | (_, NullSet.NULL):
             return BooleanSet.UNKNOWN
@@ -238,7 +262,7 @@ def _comparison_operator(left: NullSet, right: NullSet):
             return BooleanSet.TRUE_OR_FALSE
 
 
-def _is_not_distinct_from_operator(left: NullSet, right: NullSet):
+def _infer_distinct_operator(left: NullSet, right: NullSet):
     match (left, right):
         case (NullSet.NULL, NullSet.NULL):
             return BooleanSet.TRUE
@@ -248,7 +272,7 @@ def _is_not_distinct_from_operator(left: NullSet, right: NullSet):
             return BooleanSet.TRUE_OR_FALSE
 
 
-def _subquery_predicate(expression: exp.Any | exp.All | exp.Exists | exp.In):
+def _infer_subquery_predicate(expression: exp.Any | exp.All | exp.Exists | exp.In):
     return BooleanSet.TOP
 
 

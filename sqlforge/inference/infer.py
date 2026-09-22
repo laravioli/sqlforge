@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import overload
 
 from sqlglot import exp
 from sqlglot.optimizer import optimize
@@ -13,38 +14,39 @@ from sqlglot.schema import MappingSchema
 
 from sqlforge.core.structures import SQL
 
-from .expression import ExprInference
-from .join import JoinNotInferred, infer_joins
+from .exception import SchemaError, StarNotExpanded
+from .expression import ExprInference, extend
+from .join import JoinModifier, JoinNotInferred, JoinResult, infer_joins
 from .lattice import NullSet
 
 
 @dataclass(init=False)
 class ScopedSQL:
+    parent: ScopedSQL | None
     scope: Scope
     user_schema: MappingSchema
     expr_inference: ExprInference
-    dt_nullability: dict[tuple[int, str], dict[str, NullSet]]  # shared
+    null_sources: dict[str, NullOutput]
 
     def __init__(
         self,
+        parent: ScopedSQL | None,
         scope: Scope,
         user_schema: MappingSchema,
-        dt_nullability: dict[tuple[int, str], dict[str, NullSet]] | None = None,
     ):
+        self.parent = parent
         self.scope = scope
         self.user_schema = user_schema
 
         expr_inference = ExprInference(
-            scope=scope, infer_column=self._get_column_nullability, join_modifier={}
+            scope=scope, infer_column=self._column_nullability, join_modifier={}
         )
         self.expr_inference = expr_inference
-        self.dt_nullability = {} if dt_nullability is None else dt_nullability
+        self.null_sources = {}
 
     @staticmethod
     def root(sql: SQL, schema: MappingSchema, full_optimize=False):
         expression = sql.expr.copy().unnest()
-        # NOTE: maybe root should not make it (None) when i dont infer
-        # NOTE: i need somewhere, where i decide ok i dont need/have to infer this
         dialect = sql.dialect
         ast = (
             optimize(expression, schema=schema, dialect=dialect)
@@ -62,70 +64,152 @@ class ScopedSQL:
         assert scope is not None, (
             f"build_scope returned None for: {expression.sql()!r} (type={type(expression).__name__})"
         )
-        return ScopedSQL(scope=scope, user_schema=schema)
+        return ScopedSQL(parent=None, scope=scope, user_schema=schema)
 
-    def infer(self) -> dict[str, NullSet]:
-        """
-        main, recursive, nullability inference algorithm
-        """
+    def _infer_inner_scope(self, scope: Scope):
+        return ScopedSQL(parent=self, scope=scope, user_schema=self.user_schema).infer()
+
+    def infer(self) -> NullOutput:
         current_expr = self.scope.expression
 
         # resolve set operations
-        if isinstance(current_expr, exp.SetOperation):
+        if self.scope.union_scopes:
             l_out = self._infer_inner_scope(scope=self.scope.union_scopes[0])
             r_out = self._infer_inner_scope(scope=self.scope.union_scopes[1])
             match current_expr:
                 case exp.Union():
-                    return {k1: v1 | v2 for (k1, v1), (_, v2) in zip(l_out.items(), r_out.items())}
+                    return NullOutput(
+                        [(k1, v1 | v2) for (k1, v1), (_, v2) in zip(l_out, r_out, strict=True)]
+                    )
                 case exp.Intersect():
                     # https://github.com/tobymao/sqlglot/issues/8390
-                    return {k1: v1 & v2 for (k1, v1), (_, v2) in zip(l_out.items(), r_out.items())}
+                    return NullOutput(
+                        [(k1, v1 & v2) for (k1, v1), (_, v2) in zip(l_out, r_out, strict=True)]
+                    )
                 case exp.Except():
-                    return {k1: v1 - v2 for (k1, v1), (_, v2) in zip(l_out.items(), r_out.items())}
+                    return NullOutput(
+                        [(k1, v1 - v2) for (k1, v1), (_, v2) in zip(l_out, r_out, strict=True)]
+                    )
 
-        # resolve derived tables
+        # resolve ctes and derived tables
         for name, scope in self.scope.sources.items():
+            if scope in self.scope.cte_scopes:
+                pass
             if scope in self.scope.derived_table_scopes:
-                self.dt_nullability[id(self.scope), name] = self._infer_inner_scope(scope=scope)
+                self.null_sources[name] = self._infer_inner_scope(scope=scope)
 
         # resolve joins
         try:
-            join_modifier = infer_joins(current_expr, self.expr_inference)
+            join_result = infer_joins(current_expr, self.expr_inference)
         except JoinNotInferred:
-            join_modifier = {k: NullSet.MAYBE_NULL for k in self.scope.sources}
+            raise NotImplementedError
 
-        expr_inference = replace(self.expr_inference, join_modifier=join_modifier)
         # resolve select
-        return {
-            e.alias_or_name: expr_inference.infer_nullability(e)
-            for e in cast(list[exp.Expr], current_expr.expressions)
-        }
+        return self._infer_select_list(current_expr.expressions, join_result)
 
-    def _infer_inner_scope(self, scope: Scope):
-        """
-        Enter a new, inner scope using a copy of `ScopedSQL`(sharing user-schema and derived-table inference)
-        then infer the scoped expression
-        """
-        return ScopedSQL(
-            scope=scope,
-            user_schema=self.user_schema,  # read-only
-            dt_nullability=self.dt_nullability,  # mutable
-        ).infer()
+    def _infer_select_list(
+        self, expressions: list[exp.Expr], join_result: JoinResult
+    ) -> NullOutput:
+        output: list[tuple[str, NullSet]] = []
+        inference = replace(self.expr_inference, join_modifier=join_result.modifier)
 
-    def _get_column_nullability(self, expression: exp.Column) -> NullSet:
+        for expr in expressions:
+            if expr.is_star:
+                match expr:
+                    case exp.Column(table=table):
+                        output.extend(self._star_expand(table, join_result.modifier))
+                    case exp.Star():
+                        for source in join_result.ordered_sources:
+                            output.extend(self._star_expand(source, join_result.modifier))
+                    case _:
+                        raise StarNotExpanded()
+            else:
+                output.append((expr.alias_or_name, inference.infer_nullability(expr)))
+
+        return NullOutput(output)
+
+    def _star_expand(self, table: str, join_modifier: JoinModifier):
+        source = self.scope.sources.get(table)
+        if source is None:
+            raise StarNotExpanded()
+
+        pairs = (
+            self._schema_nullability(source).items()
+            if isinstance(source, exp.Table)
+            else self.null_sources[table]
+        )
+
+        extended = join_modifier.get(table)
+        for name, ns in pairs:
+            yield name, extend(ns, extended)
+
+    def _column_nullability(self, expression: exp.Column) -> NullSet:
 
         table = expression.table
         source = self.scope.sources.get(table)
         match source:
             case exp.Table():
-                dtype = self.user_schema.get_column_type(source, expression.name)
-                nullable = dtype.args.get("nullable")
-                return NullSet.NON_NULL if nullable is False else NullSet.MAYBE_NULL
+                return self._schema_nullability(source, expression.name)
 
             case Scope():
                 if source in self.scope.derived_table_scopes:
-                    return self.dt_nullability[(id(self.scope), table)][expression.name]
+                    return self.null_sources[table].get(expression.name)
                 return NullSet.MAYBE_NULL
 
             case _:
                 return NullSet.MAYBE_NULL
+
+    @overload
+    def _schema_nullability(self, table: exp.Table, column: str) -> NullSet: ...
+    @overload
+    def _schema_nullability(self, table: exp.Table, column: None = None) -> dict[str, NullSet]: ...
+    def _schema_nullability(
+        self, table: exp.Table, column: str | None = None
+    ) -> NullSet | dict[str, NullSet]:
+        if column is None:
+            schema = {
+                name: self._schema_nullability(table, name)
+                for name in self.user_schema.column_names(table)
+            }
+            if len(schema) == 0:
+                raise SchemaError()  # this is required for star expansion
+            return schema
+
+        dtype = self.user_schema.get_column_type(table, column)
+        nullable = dtype.args.get("nullable")
+        return NullSet.NON_NULL if nullable is False else NullSet.MAYBE_NULL
+
+
+@dataclass(frozen=True)
+class NullOutput:
+    """
+    Output representation of a select, always star expanded with order preserved
+    """
+
+    _output: Sequence[tuple[str, NullSet]]
+
+    def __iter__(self):
+        return iter(self._output)
+
+    @property
+    def columns(self):
+        return (t[0] for t in self._output)
+
+    @property
+    def nulls(self):
+        return (t[1] for t in self._output)
+
+    def get(self, col: int | str, default: NullSet = NullSet.MAYBE_NULL) -> NullSet:
+        """
+        Returns:
+            Nullset of first tuple matched else default
+        """
+        if isinstance(col, int):
+            return self._output[col][1]
+        for t in self._output:
+            if t[0] == col:
+                return t[1]
+        return default
+
+    def unwrap(self):
+        return self._output

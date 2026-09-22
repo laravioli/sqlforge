@@ -10,18 +10,17 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import reduce
-from typing import cast
+from typing import Literal, Protocol, cast
 
 from sqlglot import exp
 
+from .exception import JoinNotInferred
 from .expression import ExprInference
-from .lattice import Boolean, NullSet
+from .lattice import NullSet
 
 # Join
 
-
-class JoinNotInferred(Exception):
-    pass
+type JoinModifier = dict[str, Literal[NullSet.MAYBE_NULL]]
 
 
 class JoinKind(StrEnum):
@@ -52,7 +51,7 @@ class JoinKind(StrEnum):
 
 @dataclass(frozen=True)
 class Predicate:
-    _infer: ExprInference  # initial expression inference
+    _infer: ExprInference  # base context
     expression: exp.Predicate | exp.Connector | exp.Boolean | exp.Not
 
     def null_reject(self, join_modifier: dict[str, NullSet]):
@@ -69,7 +68,7 @@ class Predicate:
             False if predicate can be True
         """
         infer = replace(self._infer, join_modifier=join_modifier)
-        return Boolean.TRUE not in infer.infer_boolean(self.expression).value
+        return not infer.infer_boolean(self.expression).can_be_true
 
 
 @dataclass
@@ -138,7 +137,7 @@ class JoinNode:
 
         return self.resolve_null_extension(exclude_self=True) | {k: NullSet.NULL for k in sources}
 
-    def resolve_null_extension(self: JoinNode, exclude_self=False):
+    def resolve_null_extension(self: JoinNode, exclude_self=False) -> JoinModifier:
         """
         Does sources (user_table and derived table)
         from left and right side are null-extended ?
@@ -158,7 +157,7 @@ class JoinNode:
 
 @dataclass(frozen=True)
 class LeafNode:
-    table: exp.Table | exp.Subquery  # subquery in case of derived_table
+    source: exp.Table | exp.Subquery  # subquery in case of derived_table
 
 
 type TreeNode = LeafNode | JoinNode
@@ -174,15 +173,20 @@ def _make_builder(infer: ExprInference):
             case exp.Select():
                 from_ = cast(exp.From, expression.args.get("from_"))
                 left = _build_node(from_.this)
+            case exp.Table():
+                left = LeafNode(source=expression)
             case exp.Subquery():
-                if bool(expression.alias or isinstance(expression.this, exp.UNWRAPPED_QUERIES)):
-                    left = LeafNode(table=expression)
+                if bool(
+                    expression.alias or isinstance(expression.this, exp.UNWRAPPED_QUERIES)
+                ):  # derived_table
+                    left = LeafNode(source=expression)
                 else:
                     # recurse until we found a table or derived table
                     left = _build_node(expression.this)
-            case exp.Table():
-                left = LeafNode(table=expression)
+            case exp.Lateral():
+                raise JoinNotInferred
             case _:
+                # udtf
                 raise JoinNotInferred
 
         # eventually join with the right side
@@ -216,7 +220,7 @@ def _make_builder(infer: ExprInference):
 
 def _get_join_sources(node: TreeNode):
     return (
-        frozenset({node.table.alias_or_name})
+        frozenset({node.source.alias_or_name})
         if isinstance(node, LeafNode)
         else frozenset(node.left_sources | node.right_sources)
     )
@@ -269,20 +273,37 @@ def _simplify_tree(tree: JoinNode) -> bool:
 
 
 # Resolve
+class NullSource(Protocol):
+    @property
+    def columns(self) -> list[str]: ...
+
+    def nullable(self, col: str) -> NullSet: ...
 
 
-def infer_joins(expression: exp.Expr, infer: ExprInference) -> dict[str, NullSet]:
+def infer_joins(expression: exp.Expr, infer: ExprInference) -> JoinResult:
     """
     Use outerjoin simplification heuristic to infer joins nullability
+
     """
+    builder = _make_builder(infer)
+    tree = builder(expression)
+
     joins = expression.args.get("joins")
     if not joins:
-        return {}
+        assert isinstance(tree, LeafNode)
+        return JoinResult(modifier={}, ordered_sources=[tree.source.alias_or_name])
 
-    builder = _make_builder(infer)
-    tree = cast(JoinNode, builder(expression))
-
+    assert isinstance(tree, JoinNode)
     while _simplify_tree(tree):
         pass
 
-    return tree.resolve_null_extension()
+    return JoinResult(
+        modifier=tree.resolve_null_extension(),
+        ordered_sources=[n.source.alias_or_name for n in tree.walk() if isinstance(n, LeafNode)],
+    )
+
+
+@dataclass(frozen=True)
+class JoinResult:
+    modifier: JoinModifier
+    ordered_sources: list[str]

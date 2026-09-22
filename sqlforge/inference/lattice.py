@@ -16,12 +16,9 @@ class NullSet(Enum):
     NON_NULL = auto()
     NULL = auto()
 
-    def __bool__(self):
-        """
-        Returns:
-                `True` if the marked expression could return null else `False`
-        """
-        return self in (NullSet.MAYBE_NULL, NullSet.NULL)
+    @property
+    def can_be_null(self) -> bool:
+        return self is not NullSet.NON_NULL
 
     def __or__(self: NullSet, y: NullSet) -> NullSet:
         """
@@ -53,9 +50,9 @@ class Boolean(Enum):
     FALSE = auto()
     UNKNOWN = auto()
 
-    def __bool__(self):
-        # NOTE one exception to this is check constraint that accept TRUE or UNKNOW as True
-        return self == Boolean.TRUE
+    @property
+    def is_true(self) -> bool:
+        return self is Boolean.TRUE
 
     def __or__(self, y: Boolean) -> Boolean:
         """
@@ -103,6 +100,14 @@ class BooleanSet(Enum):
     FALSE = frozenset({Boolean.FALSE})
     UNKNOWN = frozenset({Boolean.UNKNOWN})
 
+    @property
+    def can_be_true(self) -> bool:
+        return Boolean.TRUE in self.value
+
+    @property
+    def can_be_unknown(self) -> bool:
+        return Boolean.UNKNOWN in self.value
+
     @cache
     def __or__(self: BooleanSet, y: BooleanSet):
         """
@@ -127,6 +132,6 @@ class BooleanSet(Enum):
     def to_nullset(self) -> NullSet:
         if self == BooleanSet.UNKNOWN:
             return NullSet.NULL
-        if Boolean.UNKNOWN in self.value:
+        if self.can_be_unknown:
             return NullSet.MAYBE_NULL
         return NullSet.NON_NULL
