@@ -5,10 +5,9 @@ from dataclasses import dataclass, replace
 from typing import overload
 
 from sqlglot import exp
-from sqlglot.optimizer import optimize
+from sqlglot.optimizer import Scope, build_scope, find_all_in_scope, optimize
 from sqlglot.optimizer.annotate_types import annotate_types
 from sqlglot.optimizer.qualify import qualify
-from sqlglot.optimizer.scope import Scope, build_scope
 from sqlglot.optimizer.simplify import simplify
 from sqlglot.schema import MappingSchema
 
@@ -45,7 +44,11 @@ class ScopedSQL:
         self.null_sources = {}
 
     @staticmethod
-    def root(sql: SQL, schema: MappingSchema, full_optimize=False):
+    def root(
+        sql: SQL,
+        schema: MappingSchema,
+        full_optimize=False,
+    ):
         expression = sql.expr.copy().unnest()
         dialect = sql.dialect
         ast = (
@@ -70,13 +73,13 @@ class ScopedSQL:
         return ScopedSQL(parent=self, scope=scope, user_schema=self.user_schema).infer()
 
     def infer(self) -> NullOutput:
-        current_expr = self.scope.expression
+        scope_expression = self.scope.expression
 
         # resolve set operations
         if self.scope.union_scopes:
             l_out = self._infer_inner_scope(scope=self.scope.union_scopes[0])
             r_out = self._infer_inner_scope(scope=self.scope.union_scopes[1])
-            match current_expr:
+            match scope_expression:
                 case exp.Union():
                     return NullOutput(
                         [(k1, v1 | v2) for (k1, v1), (_, v2) in zip(l_out, r_out, strict=True)]
@@ -100,31 +103,41 @@ class ScopedSQL:
 
         # resolve joins
         try:
-            join_result = infer_joins(current_expr, self.expr_inference)
+            join_result = infer_joins(scope_expression, self.expr_inference)
         except JoinNotInferred:
             raise NotImplementedError
 
         # resolve select
-        return self._infer_select_list(current_expr.expressions, join_result)
+        assert isinstance(scope_expression, exp.Selectable)
+        return self._infer_select_list(scope_expression.selects, join_result)
 
     def _infer_select_list(
         self, expressions: list[exp.Expr], join_result: JoinResult
     ) -> NullOutput:
         output: list[tuple[str, NullSet]] = []
-        inference = replace(self.expr_inference, join_modifier=join_result.modifier)
+        inference = replace(self.expr_inference, join_modifier=join_result.extension)
+        subquery_scopes = {
+            id(subquery_scope.expression): subquery_scope
+            for subquery_scope in self.scope.subquery_scopes
+        }
 
-        for expr in expressions:
-            if expr.is_star:
-                match expr:
+        for select in expressions:
+            if select.is_star:
+                match select:
                     case exp.Column(table=table):
-                        output.extend(self._star_expand(table, join_result.modifier))
+                        output.extend(self._star_expand(table, join_result.extension))
                     case exp.Star():
                         for source in join_result.ordered_sources:
-                            output.extend(self._star_expand(source, join_result.modifier))
+                            output.extend(self._star_expand(source, join_result.extension))
                     case _:
+                        # TODO: handle exp.Dot
                         raise StarNotExpanded()
             else:
-                output.append((expr.alias_or_name, inference.infer_nullability(expr)))
+                for subquery in find_all_in_scope(select, *exp.UNWRAPPED_QUERIES):
+                    subquery_scope: Scope | None = subquery_scopes.get(id(subquery))
+                    if not subquery_scope:
+                        continue
+                output.append((select.alias_or_name, inference.infer_nullability(select)))
 
         return NullOutput(output)
 
@@ -142,6 +155,9 @@ class ScopedSQL:
         extended = join_modifier.get(table)
         for name, ns in pairs:
             yield name, extend(ns, extended)
+
+    def _resolve_subquery(self):
+        pass
 
     def _column_nullability(self, expression: exp.Column) -> NullSet:
 

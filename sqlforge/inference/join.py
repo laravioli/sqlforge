@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import reduce
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 
 from sqlglot import exp
 
@@ -273,11 +273,12 @@ def _simplify_tree(tree: JoinNode) -> bool:
 
 
 # Resolve
-class NullSource(Protocol):
-    @property
-    def columns(self) -> list[str]: ...
 
-    def nullable(self, col: str) -> NullSet: ...
+
+@dataclass(frozen=True)
+class JoinResult:
+    extension: JoinModifier
+    ordered_sources: list[str]
 
 
 def infer_joins(expression: exp.Expr, infer: ExprInference) -> JoinResult:
@@ -291,19 +292,13 @@ def infer_joins(expression: exp.Expr, infer: ExprInference) -> JoinResult:
     joins = expression.args.get("joins")
     if not joins:
         assert isinstance(tree, LeafNode)
-        return JoinResult(modifier={}, ordered_sources=[tree.source.alias_or_name])
+        return JoinResult(extension={}, ordered_sources=[tree.source.alias_or_name])
 
     assert isinstance(tree, JoinNode)
     while _simplify_tree(tree):
         pass
 
     return JoinResult(
-        modifier=tree.resolve_null_extension(),
+        extension=tree.resolve_null_extension(),
         ordered_sources=[n.source.alias_or_name for n in tree.walk() if isinstance(n, LeafNode)],
     )
-
-
-@dataclass(frozen=True)
-class JoinResult:
-    modifier: JoinModifier
-    ordered_sources: list[str]
