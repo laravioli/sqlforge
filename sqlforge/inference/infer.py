@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import overload
 
 from sqlglot import exp
@@ -14,8 +14,8 @@ from sqlglot.schema import MappingSchema
 from sqlforge.core.structures import SQL
 
 from .exception import SchemaError, StarNotExpanded
-from .expression import ExprInference, extend
-from .join import JoinModifier, JoinNotInferred, JoinResult, infer_joins
+from .expression import ExprInference
+from .join import JoinInference, JoinNotInferred
 from .lattice import NullSet
 
 
@@ -25,6 +25,7 @@ class ScopedSQL:
     scope: Scope
     user_schema: MappingSchema
     expr_inference: ExprInference
+    join_inference: JoinInference
     null_sources: dict[str, NullOutput]
 
     def __init__(
@@ -36,11 +37,8 @@ class ScopedSQL:
         self.parent = parent
         self.scope = scope
         self.user_schema = user_schema
-
-        expr_inference = ExprInference(
-            scope=scope, infer_column=self._column_nullability, join_modifier={}
-        )
-        self.expr_inference = expr_inference
+        self.expr_inference = ExprInference(_infer_column=self._column_nullability)
+        self.join_inference = JoinInference(_infer_boolean=self.expr_inference.infer_boolean)
         self.null_sources = {}
 
     @staticmethod
@@ -103,19 +101,16 @@ class ScopedSQL:
 
         # resolve joins
         try:
-            join_result = infer_joins(scope_expression, self.expr_inference)
+            self.join_inference.infer(scope_expression)
         except JoinNotInferred:
             raise NotImplementedError
 
         # resolve select
         assert isinstance(scope_expression, exp.Selectable)
-        return self._infer_select_list(scope_expression.selects, join_result)
+        return self._infer_select_list(scope_expression.selects)
 
-    def _infer_select_list(
-        self, expressions: list[exp.Expr], join_result: JoinResult
-    ) -> NullOutput:
+    def _infer_select_list(self, expressions: list[exp.Expr]) -> NullOutput:
         output: list[tuple[str, NullSet]] = []
-        inference = replace(self.expr_inference, join_modifier=join_result.extension)
         subquery_scopes = {
             id(subquery_scope.expression): subquery_scope
             for subquery_scope in self.scope.subquery_scopes
@@ -125,10 +120,10 @@ class ScopedSQL:
             if select.is_star:
                 match select:
                     case exp.Column(table=table):
-                        output.extend(self._star_expand(table, join_result.extension))
+                        output.extend(self._star_expand(table))
                     case exp.Star():
-                        for source in join_result.ordered_sources:
-                            output.extend(self._star_expand(source, join_result.extension))
+                        for source in self.join_inference.ordered_sources:
+                            output.extend(self._star_expand(source))
                     case _:
                         # TODO: handle exp.Dot
                         raise StarNotExpanded()
@@ -137,11 +132,11 @@ class ScopedSQL:
                     subquery_scope: Scope | None = subquery_scopes.get(id(subquery))
                     if not subquery_scope:
                         continue
-                output.append((select.alias_or_name, inference.infer_nullability(select)))
+                output.append((select.alias_or_name, self.expr_inference.infer_nullability(select)))
 
         return NullOutput(output)
 
-    def _star_expand(self, table: str, join_modifier: JoinModifier):
+    def _star_expand(self, table: str):
         source = self.scope.sources.get(table)
         if source is None:
             raise StarNotExpanded()
@@ -151,29 +146,35 @@ class ScopedSQL:
             if isinstance(source, exp.Table)
             else self.null_sources[table]
         )
-
-        extended = join_modifier.get(table)
         for name, ns in pairs:
-            yield name, extend(ns, extended)
+            yield name, self.join_inference.null_extension.get(table, ns)
 
     def _resolve_subquery(self):
         pass
 
-    def _column_nullability(self, expression: exp.Column) -> NullSet:
+    def _column_nullability(self, table: str, column: str | None = None) -> NullSet:
 
-        table = expression.table
         source = self.scope.sources.get(table)
-        match source:
-            case exp.Table():
-                return self._schema_nullability(source, expression.name)
 
-            case Scope():
-                if source in self.scope.derived_table_scopes:
-                    return self.null_sources[table].get(expression.name)
-                return NullSet.MAYBE_NULL
+        if source is not None:
+            join_extension = self.join_inference.null_extension.get(table)
+            if join_extension is not None:
+                return join_extension
 
-            case _:
-                return NullSet.MAYBE_NULL
+            if column is None:  # table_column
+                return NullSet.NON_NULL
+
+            match source:
+                case exp.Table():
+                    return self._schema_nullability(source, column)
+
+                case Scope():
+                    if source in self.scope.derived_table_scopes:
+                        return self.null_sources[table].get(column)
+                    return NullSet.MAYBE_NULL
+
+        else:  # external column
+            return NullSet.MAYBE_NULL
 
     @overload
     def _schema_nullability(self, table: exp.Table, column: str) -> NullSet: ...

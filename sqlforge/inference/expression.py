@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import TypeIs
 
 from sqlglot import exp
-from sqlglot.optimizer.scope import Scope
 from sqlglot.optimizer.simplify import extract_date
 
 from .exception import SimplificationError, StarNotExpanded
@@ -89,9 +88,7 @@ def extend(base: NullSet, extended: NullSet | None) -> NullSet:
 
 @dataclass(frozen=True)
 class ExprInference:
-    scope: Scope
-    infer_column: Callable[[exp.Column], NullSet]
-    join_modifier: dict[str, NullSet]
+    _infer_column: Callable[[str, str | None], NullSet]
 
     def infer_nullability(self, expression: exp.Expr) -> NullSet:
         """can this expression return NULL ?"""
@@ -99,14 +96,11 @@ class ExprInference:
             case exp.Paren(this=this) | exp.Alias(this=this):
                 return self.infer_nullability(this)
 
-            case exp.Column(table=table):
-                null_extended = self._null_extended(table)
-                return self.infer_column(expression) if null_extended is None else null_extended
+            case exp.Column(table=table, name=column):
+                return self._infer_column(table, column)
 
             case exp.TableColumn(name=table):
-                # TODO: handle case where TableColumn is row-like
-                null_extended = self._null_extended(table)
-                return NullSet.NON_NULL if null_extended is None else null_extended
+                return self._infer_column(table, None)
 
             case exp.Parameter():
                 # TODO: add user annotation to permit null value
@@ -139,14 +133,6 @@ class ExprInference:
 
             case _:
                 return NullSet.MAYBE_NULL
-
-    def _null_extended(self, table: str):
-        """
-        Used during join inference (incrementaly) and select list inference.
-        The pattern is to return a new ExprInference instance when join_modifier change
-        """
-        if table in self.scope.sources:
-            return self.join_modifier.get(table)
 
     def _infer_coalesce(self, expressions: list[exp.Expr]) -> NullSet:
         result = NullSet.NULL
