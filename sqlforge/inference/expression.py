@@ -4,91 +4,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import TypeIs
 
 from sqlglot import exp
-from sqlglot.optimizer.simplify import extract_date
 
 from .exception import SimplificationError, StarNotExpanded
-from .lattice import Boolean, BooleanSet, NullSet
-
-# 5. COALESCE
-# 6. CASE
-# 7. Basic operators
-# 8. Aggregates
-# 9. UNION
-# 10. Dialect-specific functions
+from .lattice import BooleanSet, CardSet, NullSet
+from .structures import Output, meta_get_output
+from .utils import *
 
 
-# ╔══════════════════════════════════════╗
-# ║          Classification              ║
-# ╚══════════════════════════════════════╝
-
-NON_NULL_CONSTANT = (exp.Literal, exp.Boolean)
-CONSTANT = (*NON_NULL_CONSTANT, exp.Null)
-
-BOOLEAN_EXPRESSION = (exp.Predicate, exp.Connector, exp.Boolean, exp.Not)
-
-
-# Although COALESCE, GREATEST, and LEAST are syntactically similar to functions, they are
-# not ordinary functions, and thus cannot be used with explicit VARIADIC array arguments.
-# NOTE: should handle them carefully
-
-# NOTE: conditional structure (case, coalesce)
-# NOTE: strict vs non strict function
-# NOTE: cast
-# NOTE: rows
-# NOTE: subquery predicate
-
-
-def is_non_null_constant(expression: exp.Expr) -> bool:
-    expression = expression.this if isinstance(expression, exp.Neg) else expression
-    return isinstance(expression, NON_NULL_CONSTANT) or extract_date(expression) is not None
-
-
-def is_boolean_expr(expression: exp.Expr):
-    return isinstance(expression, BOOLEAN_EXPRESSION)
-
-
-def is_logical(expression: exp.Expr) -> TypeIs[exp.And | exp.Or | exp.Not]:
-    return isinstance(expression, (exp.And, exp.Or, exp.Not))
-
-
-def is_comparison_operator(
-    expression: exp.Expr,
-) -> TypeIs[exp.EQ | exp.NEQ | exp.GT | exp.GTE | exp.LT | exp.LTE]:
-    return isinstance(expression, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE))
-
-
-def is_subquery_predicate(expression: exp.Expr) -> TypeIs[exp.Any | exp.All | exp.Exists | exp.In]:
-    return isinstance(expression, (exp.Any, exp.All, exp.Exists, exp.In))
-
-
-def is_true(expression: exp.Expr) -> bool:
-    return type(expression) is exp.Boolean and expression.this
-
-
-def is_null(expression: exp.Expr) -> TypeIs[exp.Null]:
-    return type(expression) is exp.Null
-
-
-def is_row(expression: exp.Expr) -> bool:
-    return isinstance(expression, exp.Anonymous) and expression.this == "row"
-
-
-# ╔══════════════════════════════════════╗
-# ║          Inference                   ║
-# ╚══════════════════════════════════════╝
-
-
-def extend(base: NullSet, extended: NullSet | None) -> NullSet:
-    return extended if extended is not None else base
-
-
-@dataclass(frozen=True)
 class ExprInference:
-    _infer_column: Callable[[str, str | None], NullSet]
+    """
+    Define how lattice value are transformed for each sql operator or function.\n
+    Context from a current inference is injected discretly, in order to focus on semantics
+    """
+
+    def __init__(self, infer_column: Callable[[str, str | None], NullSet]):
+        self._infer_column = infer_column
 
     def infer_nullability(self, expression: exp.Expr) -> NullSet:
         """can this expression return NULL ?"""
@@ -97,6 +29,8 @@ class ExprInference:
                 return self.infer_nullability(this)
 
             case exp.Column(table=table, name=column):
+                if expression.is_star:
+                    raise StarNotExpanded()
                 return self._infer_column(table, column)
 
             case exp.TableColumn(name=table):
@@ -115,11 +49,19 @@ class ExprInference:
             case exp.Count():
                 return NullSet.NON_NULL
 
+            case exp.Subquery(this=this):
+                return self.infer_nullability(this)
+
+            case exp.Select() | exp.SetOperation():
+                # scalar subqueries
+                output = meta_get_output(expression)
+                if output.card is CardSet.EMPTY:
+                    return NullSet.NULL
+                result = output.get(0)
+                return result if output.card is CardSet.NON_EMPTY else result | NullSet.NULL
+
             case _ if is_boolean_expr(expression):
                 return self.infer_boolean(expression).to_nullset()
-
-            case exp.Subquery():
-                return NullSet.MAYBE_NULL
 
             case exp.Coalesce(this=head, expressions=tail):
                 return self._infer_coalesce([head, *tail])
@@ -131,8 +73,13 @@ class ExprInference:
             case exp.Star():
                 raise StarNotExpanded()
 
+            case exp.Binary(left=left, right=right):
+                return self.infer_nullability(left) | self.infer_nullability(right)
+
             case _:
                 return NullSet.MAYBE_NULL
+
+    # Conditional expressions
 
     def _infer_coalesce(self, expressions: list[exp.Expr]) -> NullSet:
         result = NullSet.NULL
@@ -147,6 +94,11 @@ class ExprInference:
     def _infer_greatest(self) -> NullSet:
         return NullSet.MAYBE_NULL
 
+    def _infer_least(self) -> NullSet:
+        return NullSet.MAYBE_NULL
+
+    # Boolean expressions
+
     def infer_boolean(self, expression: exp.Expr) -> BooleanSet:
         """what are the possible outcomes of this boolean expression ?"""
         match expression:
@@ -154,18 +106,32 @@ class ExprInference:
                 return self.infer_boolean(this)
 
             case exp.And(this=left, expression=right):
-                return self.infer_boolean(left) & self.infer_boolean(right)
+                return self.infer_boolean(left).logical_and(self.infer_boolean(right))
 
             case exp.Or(this=left, expression=right):
-                return self.infer_boolean(left) | self.infer_boolean(right)
+                return self.infer_boolean(left).logical_or(self.infer_boolean(right))
 
             case exp.Not(this=this):
                 return ~self.infer_boolean(this)
 
             case exp.Expr(this=left, expression=right) if is_comparison_operator(expression):
+                if subquery_predicate := expression.find(exp.All, exp.Any):
+                    subquery_output = _get_subquery_output(subquery_predicate)
+                    match subquery_predicate:
+                        case exp.All():
+                            return self._infer_all(subquery_output, expression)
+                        case exp.Any():
+                            return self._infer_any(subquery_output, expression)
+
                 return _infer_comparison_operator(
                     self.infer_nullability(left), self.infer_nullability(right)
                 )
+
+            case exp.Exists():
+                return self._infer_exists(_get_subquery_output(expression))
+
+            case exp.In(this=left):
+                return self._infer_any(_get_subquery_output(expression), operator=exp.EQ(this=left))
 
             case exp.NullSafeEQ(this=left, expression=right):
                 return _infer_distinct_operator(
@@ -182,9 +148,6 @@ class ExprInference:
             case exp.Is():
                 return self._infer_is(expression)
 
-            case _ if is_subquery_predicate(expression):
-                return _infer_subquery_predicate(expression)
-
             case exp.Boolean(this=this):
                 return BooleanSet.TRUE if this else BooleanSet.FALSE
 
@@ -196,16 +159,6 @@ class ExprInference:
 
             case _:
                 return BooleanSet.TOP
-
-    def _infer_cardinality(self, expression: exp.Subquery) -> Boolean:
-        """
-        Does this subquery return 1 or more rows ?
-        Returns:
-                Boolean.True   -> >=1\n
-                Boolean.False  -> 0\n
-                Boolean.Unknow -> can't statictly give an answer
-        """
-        return Boolean.UNKNOWN
 
     def _infer_is(self, expression: exp.Is) -> BooleanSet:
         negate = bool(expression.args.get("negate"))
@@ -228,6 +181,45 @@ class ExprInference:
                 return BooleanSet.TRUE_OR_FALSE
             case _:
                 return BooleanSet.TRUE_OR_FALSE
+
+    # Subquery expressions
+
+    def _infer_all(self, subquery_output: Output, operator: Comparison) -> BooleanSet:
+        if subquery_output.card is CardSet.EMPTY:
+            return BooleanSet.TRUE
+
+        result = _infer_comparison_operator(
+            self.infer_nullability(operator.left), subquery_output.get(0)
+        )
+        match subquery_output.card:
+            case CardSet.NON_EMPTY:
+                return result
+            case CardSet.TOP:
+                return result | BooleanSet.TRUE
+
+    def _infer_any(self, subquery_output: Output, operator: Comparison) -> BooleanSet:
+        if subquery_output.card is CardSet.EMPTY:
+            return BooleanSet.FALSE
+
+        result = _infer_comparison_operator(
+            self.infer_nullability(operator.left), subquery_output.get(0)
+        )
+        return result if subquery_output.card is CardSet.NON_EMPTY else result | BooleanSet.FALSE
+
+    def _infer_exists(self, subquery_output: Output):
+        match subquery_output.card:
+            case CardSet.TOP:
+                return BooleanSet.TRUE_OR_FALSE
+            case CardSet.NON_EMPTY:
+                return BooleanSet.TRUE
+            case CardSet.EMPTY:
+                return BooleanSet.FALSE
+
+
+def _get_subquery_output(expression: exp.SubqueryPredicate | exp.In):
+    subquery = expression.find(exp.Select, exp.SetOperation)
+    assert subquery is not None
+    return meta_get_output(subquery)
 
 
 IS_BOOLEAN_TABLE = {

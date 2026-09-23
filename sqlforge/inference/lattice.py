@@ -4,11 +4,7 @@ from enum import Enum, auto
 from functools import cache
 from itertools import product
 
-
-class BottomException(Exception):
-    """
-    raise Bottom exception in place of a bottom element
-    """
+from .exception import BottomException
 
 
 class NullSet(Enum):
@@ -109,14 +105,28 @@ class BooleanSet(Enum):
         return Boolean.UNKNOWN in self.value
 
     @cache
-    def __or__(self: BooleanSet, y: BooleanSet):
+    def __or__(self, y: BooleanSet) -> BooleanSet:
+        """
+        `join` operation
+        """
+        return BooleanSet(self.value | y.value)
+
+    @cache
+    def __and__(self, y: BooleanSet) -> BooleanSet:
+        """
+        `meet` operation
+        """
+        return BooleanSet(self.value & y.value)
+
+    @cache
+    def logical_or(self: BooleanSet, y: BooleanSet):
         """
         logical `OR`
         """
         return BooleanSet(frozenset(a | b for a, b in product(self.value, y.value)))
 
     @cache
-    def __and__(self: BooleanSet, y: BooleanSet):
+    def logical_and(self: BooleanSet, y: BooleanSet):
         """
         logical `AND`
         """
@@ -135,3 +145,41 @@ class BooleanSet(Enum):
         if self.can_be_unknown:
             return NullSet.MAYBE_NULL
         return NullSet.NON_NULL
+
+
+class CardSet(Enum):
+    TOP = auto()
+    EMPTY = auto()
+    NON_EMPTY = auto()
+
+    def __or__(self: CardSet, y: CardSet) -> CardSet:
+        """
+        `join` operation
+        """
+        if self is CardSet.EMPTY:
+            return y
+        if y is CardSet.EMPTY:
+            return self
+        if self is CardSet.NON_EMPTY and y is CardSet.NON_EMPTY:
+            return CardSet.NON_EMPTY
+        return CardSet.TOP
+
+    def __and__(self, y: CardSet) -> CardSet:
+        """
+        `meet` operation
+        """
+        if self is CardSet.EMPTY or y is CardSet.EMPTY:
+            return CardSet.EMPTY
+        return CardSet.TOP
+
+    def __sub__(self, _: CardSet) -> CardSet:
+        """
+        `difference` operation
+        """
+        if self is CardSet.EMPTY:
+            return CardSet.EMPTY
+
+        if _ is CardSet.EMPTY:
+            return self
+
+        return CardSet.TOP

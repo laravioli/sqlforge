@@ -14,7 +14,7 @@ from typing import cast
 
 from sqlglot import exp
 
-from .exception import JoinNotInferred, NoFromClause
+from .exception import JoinNotInferred
 from .lattice import BooleanSet, NullSet
 
 # Join
@@ -187,9 +187,7 @@ def _make_builder(
 
         match expression:
             case exp.Select():
-                from_ = cast(exp.From | None, expression.args.get("from_"))
-                if from_ is None:
-                    raise NoFromClause()
+                from_ = cast(exp.From, expression.args.get("from_"))
                 left = _build_node(from_.this)
             case exp.Table():
                 left = LeafNode(source=expression)
@@ -212,11 +210,7 @@ def _make_builder(
         if not joins:
             return left
 
-        return reduce(
-            _lambda_reduce,
-            joins,
-            left,
-        )
+        return reduce(_lambda_reduce, joins, left)
 
     def _lambda_reduce(left: TreeNode, join: exp.Join) -> TreeNode:
         # NOTE: USING and NATURAL are rewritten by sqlglot as ON clause
@@ -296,12 +290,12 @@ def _simplify_tree(tree: JoinNode) -> bool:
 
 
 class JoinInference:
-    def __init__(self, infer_boolean: Callable[[exp.Expr], BooleanSet], expression: exp.Expr):
+    def __init__(self, infer_boolean: Callable[[exp.Expr], BooleanSet], query: exp.Expr):
         self._modifier: JoinModifier = {}
 
-        from_clause = cast(exp.From | None, expression.args.get("from_"))
+        from_clause = query.args.get("from_")
         if from_clause:
-            self._tree = _make_builder(infer_boolean, self._set_modifier)(expression)
+            self._tree = _make_builder(infer_boolean, self._set_modifier)(query)
             match self._tree:
                 case LeafNode():
                     self.ordered_sources = [self._tree.source.alias_or_name]
@@ -318,9 +312,8 @@ class JoinInference:
         return self._modifier
 
     def _set_modifier(self, modif: JoinModifier):
-        # A dangerous part of the design.
-        # This allow the resolution of on clause
-        # using the simplification algorithm
+        # allow incremental change during simplification algorithm
+        # keeping results in one place
         self._modifier = modif
 
     def infer(self) -> None:
@@ -331,3 +324,5 @@ class JoinInference:
             while _simplify_tree(self._tree):  # fixed-point
                 pass
             self._modifier = self._tree.resolve_null_extension()
+        # would be possible to narrow down by analysing on predicate again
+        # currently the tool will skip this, going directly to where analysis
