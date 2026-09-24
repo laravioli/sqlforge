@@ -63,11 +63,10 @@ class ExprInference:
             case _ if is_boolean_expr(expression):
                 return self.infer_boolean(expression).to_nullset()
 
-            case exp.Coalesce(this=head, expressions=tail):
-                return self._infer_coalesce([head, *tail])
-
-            case exp.Greatest(this=head, expressions=tail) | exp.Least(this=head, expressions=tail):
-                return self._infer_greatest_least([head, *tail])
+            case exp.Expr(this=head, expressions=tail) if isinstance(
+                expression, (exp.Coalesce, exp.Greatest, exp.Least)
+            ):
+                return self._infer_coalesce_greatest_least([head, *tail])
 
             case _ if is_row(expression):
                 # TODO: postgresql doc 9.2
@@ -83,8 +82,9 @@ class ExprInference:
                 return NullSet.MAYBE_NULL
 
     # Conditional expressions
+    # TODO: nullif and case
 
-    def _infer_coalesce(self, expressions: list[exp.Expr]) -> NullSet:
+    def _infer_coalesce_greatest_least(self, expressions: list[exp.Expr]) -> NullSet:
         result = NullSet.NULL
         for e in expressions:
             match self.infer_nullability(e):
@@ -93,15 +93,6 @@ class ExprInference:
                 case NullSet.MAYBE_NULL:
                     result = NullSet.MAYBE_NULL
         return result
-
-    def _infer_greatest_least(self, expressions: list[exp.Expr]) -> NullSet:
-        nulls = [self.infer_nullability(e) for e in expressions]
-        if any(n is NullSet.NON_NULL for n in nulls):
-            return NullSet.NON_NULL
-        elif all(n is NullSet.NULL for n in nulls):
-            return NullSet.NULL
-        else:
-            return NullSet.MAYBE_NULL
 
     # Boolean expressions
 
