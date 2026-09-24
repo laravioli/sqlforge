@@ -6,7 +6,7 @@
 # Arnon Rosenthal
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import reduce
@@ -85,7 +85,7 @@ class JoinNode:
         right: TreeNode,
         left_sources: frozenset[str],
         right_sources: frozenset[str],
-        expression: exp.Expr | None,
+        predicate: exp.Expr | None,
         set_modifier: Callable[[dict[str, NullSet]], None],
         infer: Callable[[exp.Expr], BooleanSet],
     ):
@@ -95,11 +95,11 @@ class JoinNode:
         self.left_sources = left_sources
         self.right_sources = right_sources
 
-        if expression is None:
+        if predicate is None:
             self.predicate = None
         else:
             assert self.kind != JoinKind.CROSS
-            assert isinstance(expression, exp.Predicate | exp.Connector | exp.Boolean | exp.Not)
+            assert isinstance(predicate, exp.Predicate | exp.Connector | exp.Boolean | exp.Not)
 
             def infer_boolean(predicate: exp.Expr, sources: frozenset[str]):
                 set_modifier(
@@ -108,7 +108,7 @@ class JoinNode:
                 )
                 return infer(predicate)
 
-            self.predicate = Predicate(_infer=infer_boolean, expression=expression)
+            self.predicate = Predicate(_infer=infer_boolean, expression=predicate)
 
     @property
     def null_extend(self):
@@ -224,7 +224,7 @@ def _make_builder(
             right=right,
             left_sources=_get_join_sources(left),
             right_sources=_get_join_sources(right),
-            expression=on,
+            predicate=on,
             infer=infer_boolean,
             set_modifier=set_modifier,
         )
@@ -289,13 +289,19 @@ def _simplify_tree(tree: JoinNode) -> bool:
 # Resolve
 
 
+@dataclass(init=False)
 class JoinInference:
+    _modifier: JoinModifier
+    _tree: TreeNode | None
+    ordered_sources: Sequence[str]
+
     def __init__(self, infer_boolean: Callable[[exp.Expr], BooleanSet], query: exp.Expr):
-        self._modifier: JoinModifier = {}
+        self._modifier = {}
 
         from_clause = query.args.get("from_")
         if from_clause:
             self._tree = _make_builder(infer_boolean, self._set_modifier)(query)
+
             match self._tree:
                 case LeafNode():
                     self.ordered_sources = [self._tree.source.alias_or_name]
@@ -303,7 +309,22 @@ class JoinInference:
                     self.ordered_sources = [
                         n.source.alias_or_name for n in self._tree.walk() if isinstance(n, LeafNode)
                     ]
+
+            where_clause: exp.Where | None = query.args.get("where")
+            if where_clause:  # virtual node to null-reject on where clause
+                self._tree = JoinNode(
+                    kind=JoinKind.INNER,
+                    left=self._tree,
+                    right=LeafNode(source=exp.Table()),
+                    left_sources=frozenset(),
+                    right_sources=frozenset(),
+                    predicate=where_clause.this.unnest(),
+                    set_modifier=self._set_modifier,
+                    infer=infer_boolean,
+                )
+
         else:
+            self._where_clause = None
             self._tree = None
             self.ordered_sources = []
 
@@ -324,5 +345,3 @@ class JoinInference:
             while _simplify_tree(self._tree):  # fixed-point
                 pass
             self._modifier = self._tree.resolve_null_extension()
-        # would be possible to narrow down by analysing on predicate again
-        # currently the tool will skip this, going directly to where analysis

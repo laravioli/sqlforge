@@ -108,6 +108,8 @@ class ScopedSQL:
         )  # with dml and returning, it should be an if
         return self._infer_select_list(scope_expression.selects)
 
+        # next step is resolving where clause
+
     def _infer_set_scope(self, left: Output, right: Output):
         match self.scope.expression:
             case exp.Union():
