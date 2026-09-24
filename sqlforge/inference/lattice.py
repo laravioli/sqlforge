@@ -97,6 +97,10 @@ class BooleanSet(Enum):
     UNKNOWN = frozenset({Boolean.UNKNOWN})
 
     @property
+    def is_true(self) -> bool:
+        return self is BooleanSet.TRUE
+
+    @property
     def can_be_true(self) -> bool:
         return Boolean.TRUE in self.value
 

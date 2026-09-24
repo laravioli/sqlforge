@@ -3,7 +3,7 @@
 # Abstract Interpretation
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from sqlglot import exp
 
@@ -63,10 +63,30 @@ class ExprInference:
             case _ if is_boolean_expr(expression):
                 return self.infer_boolean(expression).to_nullset()
 
+            case exp.Case(this=this, ifs=ifs):
+                if this is None:
+                    transform = lambda i: self.infer_boolean(i.this)
+                else:
+                    transform = lambda i: self.infer_boolean(exp.EQ(this=this, expression=i.this))
+
+                _ifs = (
+                    (transform(i), self.infer_nullability(i.args.get("true")))  # type: ignore
+                    for i in ifs
+                )
+
+                return _infer_case(
+                    _ifs, self.infer_nullability(expression.args.get("default", exp.Null()))
+                )
+
             case exp.Expr(this=head, expressions=tail) if isinstance(
                 expression, (exp.Coalesce, exp.Greatest, exp.Least)
             ):
-                return self._infer_coalesce_greatest_least([head, *tail])
+                return _infer_coalesce_greatest_least(
+                    self.infer_nullability(e) for e in [head, *tail]
+                )
+
+            case exp.Nullif(this=left, expression=right):
+                return _infer_nullif(self.infer_nullability(left), self.infer_nullability(right))
 
             case _ if is_row(expression):
                 # TODO: postgresql doc 9.2
@@ -80,19 +100,6 @@ class ExprInference:
 
             case _:
                 return NullSet.MAYBE_NULL
-
-    # Conditional expressions
-    # TODO: nullif and case
-
-    def _infer_coalesce_greatest_least(self, expressions: list[exp.Expr]) -> NullSet:
-        result = NullSet.NULL
-        for e in expressions:
-            match self.infer_nullability(e):
-                case NullSet.NON_NULL:
-                    return NullSet.NON_NULL
-                case NullSet.MAYBE_NULL:
-                    result = NullSet.MAYBE_NULL
-        return result
 
     # Boolean expressions
 
@@ -227,17 +234,53 @@ IS_BOOLEAN_TABLE = {
 }
 
 
-def _infer_comparison_operator(left: NullSet, right: NullSet):
+# Transformers
+
+
+def _infer_case(ifs: Iterable[tuple[BooleanSet, NullSet]], default: NullSet) -> NullSet:
+    result = None
+    for cond, value in ifs:
+        if cond.can_be_true:
+            result = value if result is None else result | value
+        if result is NullSet.MAYBE_NULL or cond.is_true:
+            break
+    return result or default
+
+
+def _infer_nullif(left: NullSet, right: NullSet) -> NullSet:
+
+    match (left, right):
+        case (NullSet.NULL, NullSet.NULL):
+            return NullSet.NULL
+        case (NullSet.NULL, NullSet.NON_NULL) | (NullSet.NON_NULL, NullSet.NULL):
+            return left
+        case _:
+            return left | NullSet.NULL
+
+
+def _infer_coalesce_greatest_least(nulls: Iterable[NullSet]) -> NullSet:
+    result = NullSet.NULL
+    for n in nulls:
+        match n:
+            case NullSet.NON_NULL:
+                return NullSet.NON_NULL
+            case NullSet.MAYBE_NULL:
+                result = NullSet.MAYBE_NULL
+    return result
+
+
+def _infer_comparison_operator(left: NullSet, right: NullSet) -> BooleanSet:
     match (left, right):
         case (NullSet.NULL, _) | (_, NullSet.NULL):
             return BooleanSet.UNKNOWN
         case (NullSet.MAYBE_NULL, _) | (_, NullSet.MAYBE_NULL):
             return BooleanSet.TOP
         case (NullSet.NON_NULL, NullSet.NON_NULL):
+            # NOTE: sqlglot's simplify pass folds most constant comparisons beforehand
             return BooleanSet.TRUE_OR_FALSE
 
 
-def _infer_distinct_operator(left: NullSet, right: NullSet):
+def _infer_distinct_operator(left: NullSet, right: NullSet) -> BooleanSet:
     match (left, right):
         case (NullSet.NULL, NullSet.NULL):
             return BooleanSet.TRUE
@@ -245,18 +288,3 @@ def _infer_distinct_operator(left: NullSet, right: NullSet):
             return BooleanSet.FALSE
         case _:
             return BooleanSet.TRUE_OR_FALSE
-
-
-def _infer_subquery_predicate(expression: exp.Any | exp.All | exp.Exists | exp.In):
-    return BooleanSet.TOP
-
-
-def _strict_fn():
-    """
-    Strict function evaluate to NULL if any argument is NULL
-    """
-    return BooleanSet.TOP
-
-
-def _non_strict_fn(self):
-    return BooleanSet.TOP
