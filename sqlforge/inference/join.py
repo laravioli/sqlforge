@@ -309,28 +309,37 @@ class JoinInference:
                     self.ordered_sources = [
                         n.source.alias_or_name for n in self._tree.walk() if isinstance(n, LeafNode)
                     ]
-
-            where_clause: exp.Where | None = query.args.get("where")
-            if where_clause:  # virtual node to null-reject on where clause
-                self._tree = JoinNode(
-                    kind=JoinKind.INNER,
-                    left=self._tree,
-                    right=LeafNode(source=exp.Table()),
-                    left_sources=frozenset(),
-                    right_sources=frozenset(),
-                    predicate=where_clause.this.unnest(),
-                    set_modifier=self._set_modifier,
-                    infer=infer_boolean,
-                )
+                    where_clause: exp.Where | None = query.args.get("where")
+                    if where_clause:  # virtual node to null-reject on where clause
+                        self._tree = JoinNode(
+                            kind=JoinKind.INNER,
+                            left=self._tree,
+                            right=LeafNode(source=exp.Table()),
+                            left_sources=frozenset(),
+                            right_sources=frozenset(),
+                            predicate=where_clause.this.unnest(),
+                            set_modifier=self._set_modifier,
+                            infer=infer_boolean,
+                        )
 
         else:
-            self._where_clause = None
             self._tree = None
             self.ordered_sources = []
 
     @property
     def null_extension(self):
         return self._modifier
+
+    @property
+    def folded_predicate(self):
+        if self._tree is not None and isinstance(self._tree, JoinNode):
+            return exp.and_(
+                *(
+                    node.predicate.expression
+                    for node in self._tree.find_all(JoinNode)
+                    if node.kind is JoinKind.INNER and node.predicate is not None
+                )
+            )
 
     def _set_modifier(self, modif: JoinModifier):
         # allow incremental change during simplification algorithm

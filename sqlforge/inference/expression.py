@@ -1,4 +1,5 @@
 # The goal is to be sound by using local over-approximation
+# And non-relational abstract domain
 # See Static Program Analysis by Møller and Schwartzbach
 # Abstract Interpretation
 from __future__ import annotations
@@ -9,7 +10,7 @@ from sqlglot import exp
 
 from .exception import SimplificationError, StarNotExpanded
 from .lattice import BooleanSet, CardSet, NullSet
-from .structures import Output, meta_get_output
+from .structures import AbstractState, meta_get_output
 from .utils import *
 
 
@@ -188,7 +189,7 @@ class ExprInference:
 
     # Subquery expressions
 
-    def _infer_all(self, subquery_output: Output, operator: Comparison) -> BooleanSet:
+    def _infer_all(self, subquery_output: AbstractState, operator: Comparison) -> BooleanSet:
         if subquery_output.card is CardSet.EMPTY:
             return BooleanSet.TRUE
 
@@ -201,7 +202,7 @@ class ExprInference:
             case CardSet.TOP:
                 return result | BooleanSet.TRUE
 
-    def _infer_any(self, subquery_output: Output, operator: Comparison) -> BooleanSet:
+    def _infer_any(self, subquery_output: AbstractState, operator: Comparison) -> BooleanSet:
         if subquery_output.card is CardSet.EMPTY:
             return BooleanSet.FALSE
 
@@ -210,7 +211,7 @@ class ExprInference:
         )
         return result if subquery_output.card is CardSet.NON_EMPTY else result | BooleanSet.FALSE
 
-    def _infer_exists(self, subquery_output: Output):
+    def _infer_exists(self, subquery_output: AbstractState):
         match subquery_output.card:
             case CardSet.TOP:
                 return BooleanSet.TRUE_OR_FALSE

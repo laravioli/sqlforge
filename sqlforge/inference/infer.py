@@ -16,7 +16,7 @@ from .exception import BottomException, SchemaError, StarNotExpanded
 from .expression import ExprInference
 from .join import JoinInference, JoinNotInferred
 from .lattice import CardSet, NullSet
-from .structures import Output, meta_set_output
+from .structures import AbstractState, meta_set_output
 
 
 @dataclass(init=False)
@@ -26,7 +26,8 @@ class ScopedSQL:
     user_schema: MappingSchema
     expr_inference: ExprInference
     join_inference: JoinInference
-    null_sources: dict[str, Output]
+    where_narrow: dict[tuple[str, str], NullSet]
+    null_sources: dict[str, AbstractState]
 
     def __init__(
         self,
@@ -42,6 +43,7 @@ class ScopedSQL:
         self.join_inference = JoinInference(
             infer_boolean=self.expr_inference.infer_boolean, query=scope.expression
         )
+        self.where_narrow = {}
         self.null_sources = {}
 
         for subquery_scope in self.scope.subquery_scopes:
@@ -79,16 +81,16 @@ class ScopedSQL:
     def _infer_inner_scope(self, scope: Scope):
         return ScopedSQL(parent=self, scope=scope, user_schema=self.user_schema).infer()
 
-    def infer(self) -> Output:
+    def infer(self) -> AbstractState:
         scope_expression = self.scope.expression
 
-        # resolve set operations
+        # 1. set operations
         if self.scope.union_scopes:
             left = self._infer_inner_scope(scope=self.scope.union_scopes[0])
             right = self._infer_inner_scope(scope=self.scope.union_scopes[1])
             return self._infer_set_scope(left, right)
 
-        # resolve ctes and derived tables
+        # 2. ctes and derived tables
         for name, scope in self.scope.sources.items():
             if scope in self.scope.cte_scopes:
                 pass
@@ -96,24 +98,30 @@ class ScopedSQL:
             if scope in self.scope.derived_table_scopes:
                 self.null_sources[name] = self._infer_inner_scope(scope=scope)
 
-        # resolve joins
+        # 3. joins
         try:
             self.join_inference.infer()
         except JoinNotInferred:
             raise NotImplementedError
 
-        # resolve select
+        # 4. where clause
+        if self.scope.expression.args.get("where"):
+            self._infer_where()
+
+        # 5. group_by
+
+        # 6. having
+
+        # 6. select
         assert isinstance(
             scope_expression, exp.Selectable
         )  # with dml and returning, it should be an if
         return self._infer_select_list(scope_expression.selects)
 
-        # next step is resolving where clause
-
-    def _infer_set_scope(self, left: Output, right: Output):
+    def _infer_set_scope(self, left: AbstractState, right: AbstractState):
         match self.scope.expression:
             case exp.Union():
-                return Output(
+                return AbstractState(
                     [(k1, v1 | v2) for (k1, v1), (_, v2) in zip(left, right, strict=True)],
                     card=left.card | right.card,
                 )
@@ -127,17 +135,21 @@ class ScopedSQL:
                     except BottomException:
                         output.append((k1, NullSet.MAYBE_NULL))
                         card = CardSet.EMPTY
-                return Output(output, card=card or (left.card & right.card))
+                return AbstractState(output, card=card or (left.card & right.card))
 
             case exp.Except():
-                return Output(
+                return AbstractState(
                     [(k1, v1 - v2) for (k1, v1), (_, v2) in zip(left, right, strict=True)],
                     card=left.card - right.card,
                 )
             case _:
                 assert False
 
-    def _infer_select_list(self, expressions: list[exp.Expr]) -> Output:
+    def _infer_where(self):
+        # predicate = self.join_inference.folded_predicate
+        pass
+
+    def _infer_select_list(self, expressions: list[exp.Expr]) -> AbstractState:
         output: list[tuple[str, NullSet]] = []
 
         for select in expressions:
@@ -154,7 +166,7 @@ class ScopedSQL:
                         # TODO: handle exp.Dot
                         raise StarNotExpanded()
 
-        return Output(output)
+        return AbstractState(output)
 
     def _star_expand(self, table: str):
         source = self.scope.sources.get(table)

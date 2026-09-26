@@ -7,9 +7,9 @@ from .lattice import CardSet, NullSet
 
 
 @dataclass(frozen=True)
-class Output:
+class AbstractState:
     """
-    Output representation of a select expression.
+    AbstractState representation of a select expression.
     Always star expanded with order preserved
     """
 
@@ -43,14 +43,14 @@ class Output:
         return self._output
 
 
-def meta_get_output(expression: exp.Select | exp.SetOperation) -> Output:
+def meta_get_output(expression: exp.Select | exp.SetOperation) -> AbstractState:
     # lazy because output fn is context dependant
-    output: Callable[[], Output] | None = expression.meta_get("sqlforge_output_fn")
+    output: Callable[[], AbstractState] | None = expression.meta_get("sqlforge_output_fn")
     assert output is not None
     return output()
 
 
 def meta_set_output(
-    expression: exp.Select | exp.SetOperation, output: Callable[[], Output]
+    expression: exp.Select | exp.SetOperation, output: Callable[[], AbstractState]
 ) -> None:
     expression.meta["sqlforge_output_fn"] = output
