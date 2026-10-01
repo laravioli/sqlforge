@@ -85,9 +85,9 @@ class ScopedSQL:
         scope_expression = self.scope.expression
 
         # 1. set operations
-        if self.scope.union_scopes:
-            left = self._infer_inner_scope(scope=self.scope.union_scopes[0])
-            right = self._infer_inner_scope(scope=self.scope.union_scopes[1])
+        if self.scope.set_operation_scopes:
+            left = self._infer_inner_scope(scope=self.scope.set_operation_scopes[0])
+            right = self._infer_inner_scope(scope=self.scope.set_operation_scopes[1])
             return self._infer_set_scope(left, right)
 
         # 2. ctes and derived tables
