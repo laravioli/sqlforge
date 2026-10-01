@@ -47,6 +47,7 @@ _TYPEINFO: typing.Final = """\
                ELSE NULL
             END)                            AS basetype,
             t.typelem                       AS elemtype,
+            t.typcategory::text             AS category,
             COALESCE(
                 range_t.rngsubtype,
                 multirange_t.rngsubtype)    AS range_subtype,
@@ -100,12 +101,12 @@ _TYPEINFO: typing.Final = """\
 
 LOOKUP_TYPES = f"""\
 WITH RECURSIVE typeinfo_tree(
-    oid, ns, name, kind, basetype, elemtype,
+    oid, ns, name, kind, basetype, elemtype, category,
     range_subtype, attrtypoids, attributes, depth)
 AS (
     SELECT
         ti.oid, ti.ns, ti.name, ti.kind, ti.basetype,
-        ti.elemtype, ti.range_subtype,
+        ti.elemtype, ti.category, ti.range_subtype,
         ti.attrtypoids, ti.attributes, 0
     FROM
         {_TYPEINFO} AS ti
@@ -116,7 +117,7 @@ AS (
 
     SELECT
         ti.oid, ti.ns, ti.name, ti.kind, ti.basetype,
-        ti.elemtype, ti.range_subtype,
+        ti.elemtype, ti.category, ti.range_subtype,
         ti.attrtypoids, ti.attributes, tt.depth + 1
     FROM
         {_TYPEINFO} ti,
@@ -139,6 +140,7 @@ ORDER BY oid, depth DESC;
 
 TYPE_ENUM = """\
 SELECT
+    t.oid AS oid,
     n.nspname AS schema_name,
     t.typname AS type_name,
   ARRAY_AGG(e.enumlabel ORDER BY e.enumsortorder) AS values
@@ -150,6 +152,7 @@ JOIN pg_namespace AS n ON
     n.oid = t.typnamespace
     AND NOT n.nspname IN ('pg_catalog', 'information_schema')
 GROUP BY
+  t.oid,
   n.nspname,
   t.typname
 """

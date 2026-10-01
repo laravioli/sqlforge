@@ -7,6 +7,7 @@ from msgspec.json import Decoder
 
 from .stmt import LOOKUP_TYPES, TYPE_ENUM, USER_TYPE_OIDS
 from .structures import (
+    ArrayType,
     BaseType,
     CompositeType,
     DomainType,
@@ -29,7 +30,7 @@ class PgFetcher:
 
     async def fetch_types(self, oids: Sequence[int] = ()):
         records = cast(list[TypeRecord], await self._conn.fetch(LOOKUP_TYPES, oids))
-        enums = {r["type_name"]: r["values"] for r in await self._conn.fetch(TYPE_ENUM)}
+        enums = {r["oid"]: r["values"] for r in await self._conn.fetch(TYPE_ENUM)}
         return self._convert_type_records(records, enums)
 
     async def get_user_oids(self):
@@ -38,7 +39,7 @@ class PgFetcher:
         return await self._udf_oids
 
     def _convert_type_records(
-        self, recs: list[TypeRecord], enums: dict[str, list[str]]
+        self, recs: list[TypeRecord], enums: dict[Oid, list[str]]
     ) -> PGTypeRegister:
 
         register: PGTypeRegister = {}
@@ -47,10 +48,9 @@ class PgFetcher:
             kind = TypeKind(rec["kind"].decode())
             match kind:
                 case TypeKind.BASE:
-                    register[rec["oid"]] = BaseType.convert(
-                        rec,
-                        kind=kind,
-                    )
+                    # arrays are base types with typcategory 'A'; typelem alone also matches name, point
+                    cls = ArrayType if rec["category"] == "A" else BaseType
+                    register[rec["oid"]] = cls.convert(rec, kind=kind)
 
                 case TypeKind.COMPOSITE:
                     assert rec["attributes"] is not None
@@ -68,7 +68,7 @@ class PgFetcher:
                     )
 
                 case TypeKind.ENUM:
-                    values = enums[rec["name"]]
+                    values = enums[rec["oid"]]
 
                     register[rec["oid"]] = EnumType.convert(
                         rec,

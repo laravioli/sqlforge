@@ -7,7 +7,7 @@ class PgSchemaGenerator:
     def __init__(
         self,
         pg_reg: PGTypeRegister,
-        python_reg: PythonTypeRegister,
+        python_reg: dict[Oid, str],
     ):
         self.pg_reg = pg_reg
         self.python_reg = python_reg

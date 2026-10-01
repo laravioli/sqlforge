@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from sqlglot.schema import MappingSchema
 
 from sqlforge.core.structures import SQL
-from sqlforge.introspection.schemas import SchemaGenerator
+from sqlforge.introspection.schemas import mapping_schema
 from sqlforge.introspection.structures import PGTypeRegister
 
 from .infer import ScopedSQL
@@ -24,9 +24,9 @@ class InferredSQL:
 class Engine:
     def __init__(self, type_register: PGTypeRegister | None = None, schema: dict | None = None):
         if type_register is not None:
-            self.schema = SchemaGenerator(register=type_register).gen()
+            self.schema = mapping_schema(register=type_register)
         else:
-            self.schema = MappingSchema(schema=schema)
+            self.schema = MappingSchema(schema=schema, dialect="postgres")
 
     def infer(self, queries: list[SQL]):
         nb = len(queries)

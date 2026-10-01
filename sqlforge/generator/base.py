@@ -26,7 +26,7 @@ class Text:
         return self
 
     def import_from(self, module: str, *objs: str):
-        self._string += f"from {module} import {', '.join(objs)}"
+        self._string += f"from {module} import {', '.join(objs)}\n"
         return self
 
     def __repr__(self):
@@ -38,7 +38,7 @@ class Text:
 
 class StructText(Text):
     def __init__(self, name: str):
-        self._string = f"class {camel_case(name)}(Struct):\n"
+        self._string = f"class {camel_case(name)}(Struct, kw_only=True):\n"
 
     def add_attribute(self, attr_name: str, attr_type: str, default: str | None = None):
         return (
@@ -109,7 +109,7 @@ class FnText(Text):
         return_: FnReturnText | None = None,
         async_=True,
     ):
-        self._string = f"{'async def ' if async_ else 'def'}{name}"
+        self._string = f"{'async def ' if async_ else 'def '}{name}"
         self.param = param
         self.body = body
         self.return_ = return_

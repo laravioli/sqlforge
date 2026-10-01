@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from msgspec import Struct, convert
 
-from sqlforge.core.structures import PythonType
-
 type Oid = int
 type PGTypeRegister = dict[Oid, PGType]
-type PythonTypeRegister = dict[Oid, PythonType]
 
 
 class TypeRecord(TypedDict):
@@ -21,6 +18,7 @@ class TypeRecord(TypedDict):
     basetype_name: str | None
     elemtype: int
     elemtype_name: str
+    category: str
     range_subtype: int | None
     range_subtype_name: str | None
     attrtypoids: list[int] | None
@@ -29,6 +27,7 @@ class TypeRecord(TypedDict):
 
 
 class EnumRecord(TypedDict):
+    oid: int
     schema_name: str
     type_name: str
     values: list[str]
@@ -61,8 +60,6 @@ class PGType(Struct):
     name: str
     kind: TypeKind
 
-    elemtype: Literal[0] | Oid
-
     @property
     def is_user_defined(self):
         return self.ns not in ["pg_catalog", "information_schema"]
@@ -74,6 +71,10 @@ class PGType(Struct):
 
 class BaseType(PGType):
     pass
+
+
+class ArrayType(PGType):
+    elemtype: Oid  # element type (pg_type.typelem)
 
 
 class RangeType(PGType):

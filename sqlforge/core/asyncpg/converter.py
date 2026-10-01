@@ -1,26 +1,41 @@
 import datetime
 import decimal
 import ipaddress
-from functools import singledispatchmethod
 from types import UnionType
 from typing import get_args
 from uuid import UUID
 
 import asyncpg
 
+from sqlforge.core.structures import PythonType
 from sqlforge.generator.utils import camel_case
-from sqlforge.introspection import TypeConverter
-from sqlforge.introspection.structures import *
+from sqlforge.introspection.structures import (
+    ArrayType,
+    BaseType,
+    CompositeType,
+    DomainType,
+    EnumType,
+    Oid,
+    PGTypeRegister,
+    RangeType,
+    TypeKind,
+)
 
 from .utils import isidentifier
+
+type PythonTypeRegister = dict[Oid, PythonType]
 
 
 def type_name(t) -> str:
     match t:
+        case type() if (
+            t.__module__.startswith("asyncpg") and getattr(asyncpg, t.__qualname__, None) is t
+        ):
+            return f"asyncpg.{t.__qualname__}"  # public name, not the internal module path
+
         case type():
             module = t.__module__
             name = t.__qualname__
-
             return name if module == "builtins" else f"{module}.{name}"
 
         case UnionType():
@@ -42,7 +57,7 @@ PG_BASE_TYPE: dict[str, str] = {
         "bool": bool,
         "box": asyncpg.Box,
         "bytea": bytes,
-        "char": str,
+        "char": bytes,
         "name": str,
         "varchar": str,
         "text": str,
@@ -68,8 +83,8 @@ PG_BASE_TYPE: dict[str, str] = {
         "int4": int,
         "int8": int,
         "numeric": decimal.Decimal,
-        "json": dict,
-        "jsonb": dict,
+        "json": str,  # asyncpg returns json / jsonb as str unless you register a codec
+        "jsonb": str,
         "line": asyncpg.Line,
         "lseg": asyncpg.LineSegment,
         "money": str,
@@ -86,56 +101,27 @@ PG_BASE_TYPE: dict[str, str] = {
 }
 
 
-class PythonTypeConverter(TypeConverter):
-    @singledispatchmethod
-    def _convert(self, t: PGType) -> str:
-        raise NotImplementedError()
+def python_type(oid: Oid, register: PGTypeRegister) -> PythonType:
+    match register[oid]:
+        case ArrayType(elemtype=elem):
+            return f"list[{python_type(elem, register)} | None]"
+        case RangeType(kind=kind, range_subtype=sub):
+            rng = f"asyncpg.Range[{python_type(sub, register)}]"
+            return f"list[{rng}]" if kind is TypeKind.MULTI_RANGE else rng
 
-    @_convert.register
-    def _(self, t: BaseType):
-        if t.name in PG_BASE_TYPE:
-            return PG_BASE_TYPE[t.name]
-        elif t.elemtype > 0:
-            elem = self.register[t.elemtype]
-            return f"list[{self._convert(elem)}]"
-        else:
-            return "Any"
-
-    @_convert.register
-    def _(self, t: RangeType):
-
-        pg_sub_type = self.register[t.range_subtype]
-        assert not isinstance(pg_sub_type, RangeType)  # avoid infinite recursion
-        python_sub_type = self._convert(pg_sub_type)
-        base = f"asyncpg.Range[{python_sub_type}]"
-
-        if t.kind is TypeKind.RANGE:
-            return base
-        elif t.kind is TypeKind.MULTI_RANGE:
-            return f"list[{base}]"
-        else:
-            return "Any"
-
-    @_convert.register
-    def _(self, t: CompositeType):
-        assert isidentifier(t.name)
-        if t.is_user_defined:
+        case CompositeType() | DomainType() | EnumType() as t if t.is_user_defined:
+            assert isidentifier(t.name)
             return camel_case(t.name)
-        else:
+
+        case DomainType(basetype=base):
+            return python_type(base, register)
+
+        case BaseType(name=name):
+            return PG_BASE_TYPE.get(name, "Any")
+
+        case _:  # system composite types
             return "Any"
 
-    @_convert.register
-    def _(self, t: DomainType):
-        assert isidentifier(t.name)
-        if t.is_user_defined:
-            return camel_case(t.name)
-        else:
-            return "Any"
 
-    @_convert.register
-    def _(self, t: EnumType):
-        assert isidentifier(t.name)
-        if t.is_user_defined:
-            return camel_case(t.name)
-        else:
-            return "Any"
+def python_types(register: PGTypeRegister) -> PythonTypeRegister:
+    return {oid: python_type(oid, register) for oid in register}
