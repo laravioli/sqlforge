@@ -96,6 +96,10 @@ class TypedSQL:
     typed_params: dict[ParamName, PythonType]
     typed_attrs: dict[AttrName, PythonType]
 
+    @property
+    def name(self):
+        return self.source.name
+
 
 @dataclass(frozen=True)
 class ScopedSQL:

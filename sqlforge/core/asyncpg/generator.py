@@ -23,6 +23,8 @@ class APGFnGenerator:
             .import_("uuid")
             .newline()
             .import_from("collections.abc", "Iterable")
+            .import_from("enum", "StrEnum")
+            .import_from("msgspec", "Struct")
         )
         if self.schema_module:
             txt.add(f"from {self.schema_module} import *  # noqa: F403\n")

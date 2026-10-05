@@ -1,37 +1,36 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from sqlglot.schema import MappingSchema
 
-from sqlforge.introspection.schemas import mapping_schema
+from sqlforge.introspection.schemas import Table, mapping_schema, user_tables
 from sqlforge.introspection.structures import PGTypeRegister
 
 
 @dataclass(init=False)
 class Catalog:
-    tables: dict[str, Table]
+    tables: Mapping[str, Table]
     mapping_schema: MappingSchema
 
-    def __init__(self, type_register: PGTypeRegister | None = None, schema: dict | None = None):
+    def __init__(
+        self,
+        type_register: PGTypeRegister | None = None,
+        schema: dict | None = None,
+        tables: dict[str, Table] | None = None,
+    ):
+
         if type_register is not None:
+            self.tables = user_tables(register=type_register)
             self.mapping_schema = mapping_schema(register=type_register)
 
         else:
+            if tables is None:
+                raise ValueError()
+
+            self.tables = tables
             self.mapping_schema = MappingSchema(schema=schema, dialect="postgres")
 
-
-@dataclass(frozen=True)
-class Column:
-    name: str
-    type: str
-    nullable: bool
-
-
-@dataclass(frozen=True)
-class Table:
-    name: str
-    columns: dict[str, Column]
-
-    def get(self, column: str):
-        return self.columns[column]
+    def add_view(self):
+        pass
