@@ -19,9 +19,8 @@ class Env:
     def next(self, row: Row):
         return replace(self, row=row)
 
-    def column_formula(self, column: exp.Column):
+    def column_formula(self, key: tuple[str, str]):
         ancestor = self
-        key = (column.table, column.name)
 
         while ancestor is not None:
             formula = ancestor.row.nulls.get(key)
