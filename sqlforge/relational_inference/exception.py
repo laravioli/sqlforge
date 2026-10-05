@@ -2,5 +2,5 @@ class Unsupported(Exception):
     pass
 
 
-class UnknownColumn(Exception):
+class UnknownColumn(Unsupported):
     pass

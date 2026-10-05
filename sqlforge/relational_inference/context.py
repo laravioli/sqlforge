@@ -24,12 +24,11 @@ class Kind(Enum):
     EMPTY = "e"
     UNION = "u"
     PARTITION = "p"
-    PLACEHOLDER = "pl"
     PARAM = "pa"
 
 
 _KIND_OF = {k.value: k for k in Kind}
-GLOBAL_KINDS = frozenset({Kind.PARAM, Kind.PLACEHOLDER})
+GLOBAL_KINDS = frozenset({Kind.PARAM})
 MIB = 2**20
 
 

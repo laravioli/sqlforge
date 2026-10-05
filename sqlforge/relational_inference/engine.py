@@ -20,14 +20,23 @@ from .infer import Analyzer
 from .lattice import MAYBE_NULL, Nullability
 
 
-def using_or_natural(tree: exp.Expr) -> bool:
+def not_query(ast: exp.Expr) -> bool:
+    return not isinstance(ast, exp.Query)
+
+
+def contain_dml(ast: exp.Expr) -> bool:
+    return bool(ast.find(exp.Insert, exp.Update, exp.Delete, exp.Merge))
+
+
+# https://github.com/tobymao/sqlglot/issues/8516
+def using_or_natural(ast: exp.Expr) -> bool:
     """Any USING or NATURAL join in the statement? (qualify rewrites them into ON, so check first.)"""
     return any(
-        join.args.get("using") or join.method == "NATURAL" for join in tree.find_all(exp.Join)
+        join.args.get("using") or join.method == "NATURAL" for join in ast.find_all(exp.Join)
     )
 
 
-BYPASS: list[Callable[[exp.Expr], bool]] = [using_or_natural]
+BYPASS: list[Callable[[exp.Expr], bool]] = [not_query, contain_dml, using_or_natural]
 
 
 def bypass(ast: exp.Expr):
@@ -50,7 +59,7 @@ def prepare_sql(sql: SQL, schema: MappingSchema) -> Scope:
         scope = build_scope(ast)
 
     if scope is None:
-        raise Unsupported(f"{sql.name} is not supported by null engine")
+        raise Unsupported(f"{sql.name} could not create a sqlglot scope")
 
     return scope
 
@@ -91,7 +100,7 @@ class Engine:
 
             nulls = Analyzer(Context(), self.catalog).run(scope)
             if len(attrs) != len(nulls):
-                raise Unsupported
+                raise Unsupported(f"{len(nulls)} columns inferred, {len(attrs)} expected")
 
         except (SqlglotError, Unsupported) as e:
             nulls, error = [MAYBE_NULL] * len(attrs), str(e)
