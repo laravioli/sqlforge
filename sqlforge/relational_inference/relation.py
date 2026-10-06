@@ -11,11 +11,12 @@ type Key = tuple[str, str]  # alias.column
 
 @dataclass(frozen=True, slots=True)
 class Relation:
+    """Result of a scope or a cte/table materialization"""
+
     ctx: Context
     columns: Sequence[str]
     nulls: Sequence[Formula]
     invariant: Formula
-    card: None = None  # tbd
 
     @property
     def is_empty(self) -> bool:
@@ -27,7 +28,7 @@ class Relation:
 
     def compress(self):
         visible = set().union(*(f.support for f in self.nulls))
-        hidden = {v for v in self.invariant.support - visible if not self.ctx.is_global(v)}
+        hidden = {v for v in (self.invariant.support - visible) if not self.ctx.is_global(v)}
         return (
             replace(self, invariant=self.ctx.bdd.exist(hidden, self.invariant)) if hidden else self
         )
@@ -47,29 +48,38 @@ class Relation:
             eps = self.ctx.fresh(Kind.EMPTY)
         return Subquery(self, eps)
 
-    def cte(self, alias: str):
-        ctx = self.ctx
-        support = set(self.invariant.support).union(*(f.support for f in self.nulls))
-        definitions = {}
 
-        for v in sorted(support, key=ctx.bdd.level_of_var):
-            kind = ctx.kind(v)
-            if not ctx.is_global(v):
-                definitions[v] = ctx.fresh(kind)
+@dataclass(frozen=True)
+class Template:
+    """Factory of cte/table relation"""
 
-        if not definitions:
-            return self.row(alias)
+    _relation: Relation
 
-        let = lambda f: ctx.bdd.let(definitions, f)
-        return Row(
-            nulls={(alias, k): v for k, v in zip(self.columns, map(let, self.nulls))},
-            invariant=let(self.invariant),
+    def materialize(self):
+        rel = self._relation
+        ctx = rel.ctx
+        support = set(rel.invariant.support).union(*(f.support for f in rel.nulls))
+
+        fresh = {
+            v: ctx.fresh(ctx.kind(v))
+            for v in sorted(support, key=ctx.bdd.level_of_var)
+            if not ctx.is_global(v)
+        }
+
+        if not fresh:
+            return rel
+
+        let = lambda f: ctx.bdd.let(fresh, f)
+        return replace(
+            rel,
+            nulls=list(map(let, rel.nulls)),
+            invariant=let(rel.invariant),
         )
 
 
 @dataclass(frozen=True, slots=True)
 class Row:
-    """Abstract representation of a row during sql execution"""
+    """The row being transformed inside one scope"""
 
     nulls: Mapping[tuple[str, str], Formula]
     invariant: Formula
