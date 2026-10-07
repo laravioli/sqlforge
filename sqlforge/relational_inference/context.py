@@ -20,7 +20,7 @@ class Kind(Enum):
     BASE = "b"
     VALUE = "v"
     MAYBE = "m"
-    MATCHED = "ma"
+    MATCH = "ma"
     EMPTY = "e"
     UNION = "u"
     PARTITION = "p"

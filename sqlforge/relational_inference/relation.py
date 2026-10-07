@@ -6,7 +6,9 @@ from dataclasses import dataclass, replace
 from .context import Context, Formula, Kind
 from .lattice import Nullability
 
-type Key = tuple[str, str]  # alias.column
+type Alias = str
+type Column = str
+type Key = tuple[Alias, Column]  # alias.column
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +83,7 @@ class Template:
 class Row:
     """The row being transformed inside one scope"""
 
-    nulls: Mapping[tuple[str, str], Formula]
+    nulls: Mapping[Key, Formula]
     invariant: Formula
 
     @staticmethod

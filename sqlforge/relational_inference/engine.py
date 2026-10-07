@@ -98,7 +98,7 @@ class Engine:
             error = None
             scope = prepare_sql(statement.source, self.catalog.mapping_schema)
 
-            nulls = Analyzer(Context(), self.catalog).run(scope)
+            nulls = Analyzer(Context(), self.catalog).run(scope).result()
             if len(attrs) != len(nulls):
                 raise Unsupported(f"{len(nulls)} columns inferred, {len(attrs)} expected")
 
