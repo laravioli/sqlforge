@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from functools import cached_property
+from functools import cached_property, reduce
+from typing import overload
 
 from sqlglot import exp
 from sqlglot.optimizer import Scope
@@ -45,11 +46,65 @@ class ScopedAnalyzer:
         return type(self)(self.analyzer, scope, outer).analyse()
 
     def select(self) -> Relation:
-        _ = Env(self, {}, self.outer)
+        row = self._from()
 
         return Relation(
-            ctx=self.ctx, columns=(), nulls=(), invariant=self.ctx.true & self.ctx.all(self.side)
+            ctx=self.ctx,
+            columns=tuple(name for (_, name) in row.nulls),
+            nulls=tuple(row.nulls.values()),
+            invariant=row.invariant & self.ctx.all(self.side),
         )
+
+    def _from(self):
+        select = self.scope.expression
+        from_ = select.args.get("from_")
+        if from_ is None:
+            return Row.unit(self.ctx)
+        return self._join(select, Env(self, {}, self.outer))
+
+    def _join(self, expr: exp.Expr, env: Env) -> Row:
+        """
+        Rules:
+
+        - JOIN is left-associative and binds tighter than the comma:
+          a, b RIGHT JOIN c  =  a × (b ⟖ c)        a is never padded
+        - a LATERAL item sees every FROM item on its left; an ON sees only its two operands.
+        """
+        match expr:
+            case exp.Select():
+                left = self._join(expr.args.get("from_").this, env)  # type: ignore
+            case _ if is_join_group(expr):
+                left = self._join(expr.this, env)  # resolve to a subquery
+            case exp.Table() | exp.Subquery():
+                left = self.source(expr)
+            case exp.Lateral():
+                left = self.source(expr, env)
+            case _:
+                raise Unsupported(f"{expr} is not supported in a join")
+
+        joins = expr.args.get("joins")
+        if not joins:
+            return left
+
+        def step(acc: tuple[Row, Row], join: exp.Join) -> tuple[Row, Row]:
+            # closed: the comma trees already finished, tree: the one being built
+            closed, tree = acc
+            if t.JoinKind.from_expr(join) is t.JoinKind.COMMA:
+                closed = t.cross(closed, tree)
+                return closed, self._join(join.this, env.bind({**env.nulls, **closed.nulls}))
+
+            right = self._join(join.this, env.bind({**env.nulls, **closed.nulls, **tree.nulls}))
+            on = join.args.get("on")
+
+            if on is not None:
+                t_on, _ = env.bind({**tree.nulls, **right.nulls}).evaluator().pred(on)
+            else:
+                t_on = self.ctx.true
+
+            return closed, t.join(self.ctx, join, tree, right, t_on)
+
+        closed, tree = reduce(step, joins, (Row.unit(self.ctx), left))
+        return t.cross(closed, tree)
 
     @cached_property
     def _subqueries(self) -> dict[exp.Expr, Scope]:
@@ -58,12 +113,19 @@ class ScopedAnalyzer:
     def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery:
         return Subquery(self.child(self._subqueries[expr], env), self.ctx.fresh(Kind.EMPTY))
 
+    @overload
+    def source(self, node: exp.Table | exp.Subquery, outer: None = None) -> Row: ...
+    @overload
+    def source(self, node: exp.Lateral, outer: Env) -> Row: ...
     def source(
         self,
         node: exp.Table | exp.Subquery | exp.Lateral,
-        env: Env,
+        outer: Env | None = None,
     ) -> Row:
         alias = node.alias_or_name
+        if alias not in self.scope.selected_sources:
+            raise Unsupported(f"source {type(node).__name__} {alias!r}")
+
         _, src = self.scope.selected_sources[alias]
 
         match node:
@@ -76,8 +138,8 @@ class ScopedAnalyzer:
             case exp.Subquery():
                 return self.child(src, self.outer).row(alias)  # type: ignore
 
-            case exp.Lateral():
-                return self.child(src.subquery_scopes[0], env).row(alias)  # type: ignore
+            case exp.Lateral() if isinstance(node.this, exp.Subquery):  # not LATERAL fn
+                return self.child(src.subquery_scopes[0], outer).row(alias)  # type: ignore
 
             case _:
                 raise Unsupported(f"source {type(node).__name__}")
@@ -126,3 +188,9 @@ class Analyzer:
             return relation.row(alias)
 
         return template.materialize().row(alias)
+
+
+def is_join_group(node: exp.Expr) -> bool:
+    return isinstance(node, exp.Subquery) and not (
+        node.alias or isinstance(node.this, exp.UNWRAPPED_QUERIES)
+    )

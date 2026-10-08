@@ -79,7 +79,8 @@ def _pad(row: Row, real: Formula) -> Row:
     return Row({k: real.implies(n) for k, n in row.nulls.items()}, real.implies(row.invariant))
 
 
-def join(ctx: Context, kind: JoinKind, left: Row, right: Row, on: Formula) -> Row:
+def join(ctx: Context, expr: exp.Join, left: Row, right: Row, on: Formula) -> Row:
+    kind = JoinKind.from_expr(expr)
     ml = ctx.fresh(Kind.MATCH) if kind in (JoinKind.RIGHT, JoinKind.FULL) else ctx.true
     mr = ctx.fresh(Kind.MATCH) if kind in (JoinKind.LEFT, JoinKind.FULL) else ctx.true
     return filter_(cross(_pad(left, ml), _pad(right, mr)), (ml | mr) & (ml & mr).implies(on))
