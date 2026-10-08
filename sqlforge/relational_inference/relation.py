@@ -97,3 +97,7 @@ class Subquery:
 
     relation: Relation
     empty: Formula  # subquery returns no row
+
+    @property
+    def scalar_null(self):
+        return self.empty | self.relation.nulls[0]

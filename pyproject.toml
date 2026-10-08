@@ -8,8 +8,8 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
-    "sqlglot[c]>=30.14.0",
-    "asyncpg>=0.31.0",
+    "sqlglot[c]>=30.21.0",
+    "asyncpg>=0.32.0",
     "msgspec>=0.21.1",
     "dd>=0.6.0",
 ]

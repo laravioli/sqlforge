@@ -11,6 +11,7 @@ from .catalog import Catalog
 from .context import Context, Formula, Kind
 from .eval import Env
 from .exception import Unsupported
+from .expression import is_join_group
 from .relation import Relation, Row, Subquery, Template
 
 
@@ -47,6 +48,7 @@ class ScopedAnalyzer:
 
     def select(self) -> Relation:
         row = self._from()
+        row = self._where(row)
 
         return Relation(
             ctx=self.ctx,
@@ -87,24 +89,34 @@ class ScopedAnalyzer:
             return left
 
         def step(acc: tuple[Row, Row], join: exp.Join) -> tuple[Row, Row]:
-            # closed: the comma trees already finished, tree: the one being built
-            closed, tree = acc
+            # closed: the comma trees already finished, left: the one being built
+            closed, left = acc
             if t.JoinKind.from_expr(join) is t.JoinKind.COMMA:
-                closed = t.cross(closed, tree)
-                return closed, self._join(join.this, env.bind({**env.nulls, **closed.nulls}))
+                closed = t.cross(closed, left)
+                right = self._join(join.this, env.bind({**env.nulls, **closed.nulls}))
+                return closed, right
 
-            right = self._join(join.this, env.bind({**env.nulls, **closed.nulls, **tree.nulls}))
+            right = self._join(join.this, env.bind({**env.nulls, **closed.nulls, **left.nulls}))
             on = join.args.get("on")
 
             if on is not None:
-                t_on, _ = env.bind({**tree.nulls, **right.nulls}).evaluator().pred(on)
+                t_on, _ = env.bind({**left.nulls, **right.nulls}).evaluator().pred(on)
             else:
                 t_on = self.ctx.true
-
-            return closed, t.join(self.ctx, join, tree, right, t_on)
+            return closed, t.join(self.ctx, join, left, right, t_on)
 
         closed, tree = reduce(step, joins, (Row.unit(self.ctx), left))
         return t.cross(closed, tree)
+
+    def _where(self, row: Row):
+        where = self.scope.expression.args.get("where")
+        if where is None:
+            return row
+        t_where, _ = Env(self, row.nulls, self.outer).evaluator().pred(where.this)
+        return t.filter_(row, t_where)
+
+    def _group_by(self, row: Row):
+        pass
 
     @cached_property
     def _subqueries(self) -> dict[exp.Expr, Scope]:
@@ -188,9 +200,3 @@ class Analyzer:
             return relation.row(alias)
 
         return template.materialize().row(alias)
-
-
-def is_join_group(node: exp.Expr) -> bool:
-    return isinstance(node, exp.Subquery) and not (
-        node.alias or isinstance(node.this, exp.UNWRAPPED_QUERIES)
-    )

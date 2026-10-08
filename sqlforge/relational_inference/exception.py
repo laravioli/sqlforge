@@ -4,3 +4,7 @@ class Unsupported(Exception):
 
 class UnknownColumn(Unsupported):
     pass
+
+
+class StarNotExpanded(Unsupported):
+    pass
