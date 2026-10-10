@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import cached_property, reduce
-from typing import overload
+from typing import cast, overload
 
 from sqlglot import exp
 from sqlglot.optimizer import Scope
@@ -11,7 +11,7 @@ from .catalog import Catalog
 from .context import Context, Formula, Kind
 from .eval import Env
 from .exception import Unsupported
-from .expression import is_join_group
+from .expression import is_join_group, is_plain_aggregate
 from .relation import Relation, Row, Subquery, Template
 
 
@@ -49,13 +49,11 @@ class ScopedAnalyzer:
     def select(self) -> Relation:
         row = self._from()
         row = self._where(row)
+        row = self._group_by(row)
+        row = self._having(row)
+        row = self._window(row)
 
-        return Relation(
-            ctx=self.ctx,
-            columns=tuple(name for (_, name) in row.nulls),
-            nulls=tuple(row.nulls.values()),
-            invariant=row.invariant & self.ctx.all(self.side),
-        )
+        return self._project(row)
 
     def _from(self):
         select = self.scope.expression
@@ -93,14 +91,14 @@ class ScopedAnalyzer:
             closed, left = acc
             if t.JoinKind.from_expr(join) is t.JoinKind.COMMA:
                 closed = t.cross(closed, left)
-                right = self._join(join.this, env.bind({**env.nulls, **closed.nulls}))
+                right = self._join(join.this, env.extend(closed))
                 return closed, right
 
-            right = self._join(join.this, env.bind({**env.nulls, **closed.nulls, **left.nulls}))
+            right = self._join(join.this, env.extend(closed, left))
             on = join.args.get("on")
 
             if on is not None:
-                t_on, _ = env.bind({**left.nulls, **right.nulls}).evaluator().pred(on)
+                t_on, _ = env.bind(left, right).evaluator().pred(on)
             else:
                 t_on = self.ctx.true
             return closed, t.join(self.ctx, join, left, right, t_on)
@@ -116,7 +114,27 @@ class ScopedAnalyzer:
         return t.filter_(row, t_where)
 
     def _group_by(self, row: Row):
-        pass
+        if is_plain_aggregate(self.scope.expression):  # type: ignore
+            no_input_row = self.ctx.fresh(Kind.EMPTY)
+            return Row(nulls=row.nulls, invariant=(~no_input_row).implies(row.invariant))
+        return row
+
+    def _having(self, row: Row):
+        return row
+
+    def _window(self, row: Row):
+        return row
+
+    def _project(self, row: Row) -> Relation:
+        select = cast(exp.Select, self.scope.expression)
+        ev = Env(self, row.nulls, self.outer).evaluator()
+
+        return Relation(
+            ctx=self.ctx,
+            columns=[e.alias_or_name for e in select.selects],
+            nulls=[ev.null(e) for e in select.selects],
+            invariant=row.invariant & self.ctx.all(self.side),
+        )
 
     @cached_property
     def _subqueries(self) -> dict[exp.Expr, Scope]:

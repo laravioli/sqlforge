@@ -8,8 +8,13 @@ from sqlglot import exp
 
 from .context import Context, Formula, Kind
 from .exception import StarNotExpanded, UnknownColumn
-from .expression import is_boolean_expr, is_non_null_constant, is_single_row, is_strict_binary
-from .relation import Key, Subquery
+from .expression import (
+    is_boolean_expr,
+    is_comparison_operator,
+    is_non_null_constant,
+    is_strict_binary,
+)
+from .relation import Key, Row, Subquery
 
 type Predicate = tuple[Formula, Formula]
 
@@ -31,8 +36,17 @@ class Env:
     def evaluator(self):
         return Evaluator(self)
 
-    def bind(self, nulls: Mapping[Key, Formula]):
-        return replace(self, nulls=nulls)
+    def bind(self, *rows: Row) -> Env:
+        return replace(
+            self,
+            nulls={k: n for row in rows for k, n in row.nulls.items()},
+        )
+
+    def extend(self, *rows: Row) -> Env:
+        return replace(
+            self,
+            nulls={k: n for row in (self, *rows) for k, n in row.nulls.items()},
+        )
 
     def null(self, key: Key) -> Formula:
         env: Env | None = self
@@ -41,6 +55,15 @@ class Env:
                 return formula
             env = env.outer
         raise UnknownColumn(key)
+
+    def fields(self, alias: str) -> list[Formula]:
+        env: Env | None = self
+        while env is not None:
+            found = [f for (a, _), f in env.nulls.items() if a == alias]
+            if found:
+                return found
+            env = env.outer
+        raise UnknownColumn((alias, "*"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +91,7 @@ class Evaluator:
                 return self.env.null((table, name))
 
             case exp.TableColumn():
-                return ctx.fresh(Kind.MAYBE)
+                return ctx.fresh(Kind.MAYBE) & ctx.all(self.env.fields(e.name))
 
             case exp.Parameter(this=this):
                 return ctx.param(this.to_py())  # type: ignore
@@ -91,10 +114,6 @@ class Evaluator:
                 return self.null(this)  # unwrap
 
             case exp.Select() | exp.SetOperation():  # scalar subquery
-                # NOTE: an aggregate without GROUP BY is exactly one row, so rework with aggregate feature
-                if is_single_row(e):
-                    head = e.expressions[0].unalias()
-                    return ctx.false if isinstance(head, exp.Count) else ctx.fresh(Kind.MAYBE)
                 return self._subquery(e).scalar_null
 
             case exp.Expr(this=head, expressions=tail) if isinstance(
@@ -137,6 +156,9 @@ class Evaluator:
             case exp.Cast(this=this):
                 return self.null(this)
 
+            case exp.DPipe(this=l, expression=r):
+                return ctx.fresh(Kind.MAYBE) & (self.null(l) | self.null(r))
+
             case _ if is_strict_binary(e):
                 return self.null(e.this) | self.null(e.expression)
 
@@ -158,7 +180,46 @@ class Evaluator:
         """
 
         ctx = self.ctx
+
         match e:
+            case exp.Paren(this=this):
+                return self.pred(this)
+
+            case exp.And(this=left, expression=right):
+                t_l, f_l = self.pred(left)
+                t_r, f_r = self.pred(right)
+
+                return t_l & t_r, f_l | f_r
+
+            case exp.Or(this=left, expression=right):
+                t_l, f_l = self.pred(left)
+                t_r, f_r = self.pred(right)
+
+                return t_l | t_r, f_l & f_r
+
+            case exp.Not(this=this):
+                t, f = self.pred(this)
+                return f, t
+
+            case _ if is_comparison_operator(e):
+                if a := e.find(exp.All, exp.Any):
+                    sub_expr = a.find(exp.Select, exp.SetOperation)
+                    assert sub_expr is not None
+                    sub = self._subquery(sub_expr)
+                    match a:
+                        case exp.All():
+                            return ctx.true, ctx.false
+                        case exp.Any():
+                            return ctx.true, ctx.false
+                else:
+                    return ctx.true, ctx.false
+
+            case exp.Boolean(this=this):
+                return (ctx.true, ctx.false) if this else (ctx.false, ctx.true)
+
+            case exp.Null():
+                return ctx.false, ctx.false
+
             case _:
                 u, v = ctx.fresh(Kind.VALUE), ctx.fresh(Kind.VALUE)
                 return u, ~u & v

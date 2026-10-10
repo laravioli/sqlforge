@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TypeIs
 
 from sqlglot import exp
@@ -64,32 +65,39 @@ def is_join_group(node: exp.Expr) -> bool:
 
 
 def is_strict_binary(e: exp.Expr) -> bool:
-    if isinstance(e, exp.DPipe):
-        return _is_known_non_array(e.this, e.expression)
     return isinstance(e, STRICT_BINARY)
 
 
-def _is_known_non_array(*operands: exp.Expr) -> bool:
-    for o in operands:
-        ty = o.type
-        if (
-            ty is None
-            or ty.this in (exp.DataType.Type.UNKNOWN, exp.DataType.Type.ARRAY)
-            or ty.is_type("array")
-        ):
-            return False
-    return True
-
-
-def is_single_row(select: exp.Expr) -> bool:
-    """An aggregate query without GROUP BY / HAVING / LIMIT / OFFSET returns exactly one row,
-    whatever FROM and WHERE produce."""
-    if not isinstance(select, exp.Select):
-        return False
-    if any(select.args.get(k) for k in ("group", "having", "limit", "offset")):
-        return False
-    return any(
-        agg.find_ancestor(exp.Select) is select and not isinstance(agg.parent, exp.Window)
-        for p in select.expressions
-        for agg in p.find_all(exp.AggFunc)
+def is_plain_aggregate(select: exp.Select, aggregates: frozenset[str] | None = None) -> bool:
+    group = select.args.get("group")
+    if group is not None:  # GROUP BY () is one group, any other GROUP BY one row per group
+        return all(isinstance(g, exp.Tuple) and not g.expressions for g in group.expressions)
+    if select.args.get("having"):
+        return True
+    clauses = (
+        *select.expressions,
+        select.args.get("order"),
+        select.args.get("distinct"),
+        *(select.args.get("windows") or ()),
     )
+    return any(
+        not _is_window_call(f)
+        and (isinstance(f, exp.AggFunc) or aggregates is None or f.name.lower() in aggregates)
+        for clause in clauses
+        if clause is not None
+        for f in _own_calls(clause)
+    )
+
+
+def _own_calls(node: exp.Expr) -> Iterator[exp.Expr]:
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (exp.AggFunc, exp.Anonymous)):
+            yield n
+        stack.extend(c for c in n.iter_expressions() if not isinstance(c, exp.Query))
+
+
+def _is_window_call(f: exp.Expr) -> bool:
+    node = f.parent if isinstance(f.parent, exp.Filter) else f
+    return isinstance(node.parent, exp.Window) and node.arg_key == "this"

@@ -33,6 +33,9 @@ class PgFetcher:
         enums = {r["oid"]: r["values"] for r in await self._conn.fetch(TYPE_ENUM)}
         return self._convert_type_records(records, enums)
 
+    async def fetch_fn(self):
+        pass
+
     async def get_user_oids(self):
         if self._udf_oids is None:
             self._udf_oids = asyncio.create_task(self._conn.fetchval(USER_TYPE_OIDS))

@@ -99,7 +99,7 @@ _TYPEINFO: typing.Final = """\
     )
 """
 
-LOOKUP_TYPES = f"""\
+LOOKUP_TYPES: typing.Final = f"""\
 WITH RECURSIVE typeinfo_tree(
     oid, ns, name, kind, basetype, elemtype, category,
     range_subtype, attrtypoids, attributes, depth)
@@ -138,7 +138,7 @@ ORDER BY oid, depth DESC;
 """
 
 
-TYPE_ENUM = """\
+TYPE_ENUM: typing.Final = """\
 SELECT
     t.oid AS oid,
     n.nspname AS schema_name,

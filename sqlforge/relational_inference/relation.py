@@ -100,4 +100,7 @@ class Subquery:
 
     @property
     def scalar_null(self):
+        # if is_single_row(e): NOTE: would be done with card analysis
+        #     head = e.expressions[0].unalias()
+        #     return ctx.false if isinstance(head, exp.Count) else ctx.fresh(Kind.MAYBE)
         return self.empty | self.relation.nulls[0]

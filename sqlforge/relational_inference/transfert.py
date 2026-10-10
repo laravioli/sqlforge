@@ -14,6 +14,7 @@ def setop(node: exp.SetOperation, left: Relation, right: Relation) -> Relation:
         case exp.Union():
             return union(left, right)
         case exp.Intersect():
+            # https://github.com/tobymao/sqlglot/issues/8390
             return intersection(left, right)
         case exp.Except():
             return left
