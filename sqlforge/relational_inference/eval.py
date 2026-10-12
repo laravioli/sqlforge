@@ -1,34 +1,39 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from sqlglot import exp
 
 from .context import Context, Formula, Kind
 from .exception import StarNotExpanded, UnknownColumn
-from .expression import (
+from .expressions import (
+    Comparison,
     is_boolean_expr,
-    is_comparison_operator,
+    is_comparison,
     is_non_null_constant,
-    is_strict_binary,
+    is_strict_binary_operator,
 )
 from .relation import Key, Row, Subquery
 
-type Predicate = tuple[Formula, Formula]
+type PredicateFormula = tuple[Formula, Formula]
 
 
 class ScopeProtocol(Protocol):
     ctx: Context
     side: list[Formula]
-    notebook: dict[exp.Expr, Formula]
+    notebook: Notebook
 
     def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery: ...
 
 
 @dataclass(frozen=True, slots=True)
 class Env:
+    """
+    A view of current null facts of a row, at this point of evaluation
+    """
+
     scope: ScopeProtocol
     nulls: Mapping[Key, Formula]
     outer: Env | None
@@ -66,6 +71,81 @@ class Env:
         raise UnknownColumn((alias, "*"))
 
 
+@dataclass
+class Notebook:
+    """
+    Store reusable facts about a row, from their creation to the end of a scope\n
+    If a fact is not reusable, a new var is returned instead.
+    """
+
+    ctx: Context
+    functions: None  # TODO
+    _vars: dict[tuple[str, *tuple[exp.Expr, ...]], Formula] = field(default_factory=dict)
+    _reusables: dict[exp.Expr, bool] = field(default_factory=dict)
+
+    def _var(self, fact: tuple[str, *tuple[exp.Expr, ...]], kind: Kind) -> Formula:
+        var = self._vars.get(fact)
+        if var is None:
+            var = self._vars[fact] = self.ctx.fresh(kind)
+        return var
+
+    def compare(self, op: Comparison, left: exp.Expr, right: exp.Expr) -> Formula:
+        if not (self._reusable(left) and self._reusable(right)):
+            return self.ctx.fresh(Kind.VALUE)
+        less, equal, greater = self._order(left, right)
+        match op:
+            case exp.EQ():
+                return equal
+            case exp.NEQ():
+                return ~equal
+            case exp.LT():
+                return less
+            case exp.GT():
+                return greater
+            case exp.LTE():
+                return ~greater
+            case exp.GTE():
+                return ~less
+
+    def _order(self, left: exp.Expr, right: exp.Expr) -> tuple[Formula, Formula, Formula]:
+        if left == right:
+            return self.ctx.false, self.ctx.true, self.ctx.false
+
+        first, second = sorted((left, right), key=hash)
+        equal = self._var(("eq", first, second), Kind.VALUE)
+        below = self._var(("lt", first, second), Kind.VALUE)
+        less, greater = ~equal & below, ~equal & ~below
+
+        return (less, equal, greater) if first == left else (greater, equal, less)
+
+    def holds(self, tag: str, *operands: exp.Expr):
+        if not all(self._reusable(o) for o in operands):
+            return self.ctx.fresh(Kind.VALUE)
+        return self._var((f"{tag}_h", *operands), Kind.VALUE)
+
+    def unknown(self, tag: str, expr: exp.Expr):
+        if not self._reusable(expr):
+            return self.ctx.fresh(Kind.MAYBE)
+        return self._var((f"{tag}_u", expr), Kind.MAYBE)
+
+    def _reusable(self, expr: exp.Expr):
+        reusable = self._reusables.get(expr)
+        if reusable is None:
+            reusable = not (bool(expr.find(exp.Query)) or self._volatile(expr))
+        return reusable
+
+    def _volatile(self, expr: exp.Expr):
+        if self.functions is None:
+            test = lambda e: isinstance(e, (exp.Anonymous, exp.Rand, exp.Uuid))
+        else:
+            test = lambda e: True  # TODO
+
+        for fn in expr.find_all(exp.Func):
+            if test(fn):
+                return True
+        return False
+
+
 @dataclass(frozen=True, slots=True)
 class Evaluator:
     env: Env
@@ -75,11 +155,12 @@ class Evaluator:
         return self.env.scope.ctx
 
     @property
-    def notebook(self) -> dict[exp.Expr, Formula]:
+    def notebook(self) -> Notebook:
         return self.env.scope.notebook
 
     def null(self, e: exp.Expr) -> Formula:
         ctx = self.ctx
+        notebook = self.notebook
 
         match e:
             case exp.Paren(this=this) | exp.Alias(this=this):
@@ -128,11 +209,13 @@ class Evaluator:
 
             case exp.Case(this=this):
                 if this is None:
-                    transform = lambda i: self.pred(i.this)
+
+                    def transform(i):
+                        return self.pred(i.this)
                 else:
-                    transform = lambda i: self.pred(
-                        exp.EQ(this=this.copy(), expression=i.this.copy())
-                    )
+
+                    def transform(i):
+                        return self.pred(exp.EQ(this=this.copy(), expression=i.this.copy()))
 
                 _ifs = (
                     (transform(i), self.null(i.args.get("true")))  # type: ignore
@@ -159,7 +242,7 @@ class Evaluator:
             case exp.DPipe(this=l, expression=r):
                 return ctx.fresh(Kind.MAYBE) & (self.null(l) | self.null(r))
 
-            case _ if is_strict_binary(e):
+            case _ if is_strict_binary_operator(e):
                 return self.null(e.this) | self.null(e.expression)
 
             case exp.Func():
@@ -171,7 +254,7 @@ class Evaluator:
             case _:
                 return ctx.fresh(Kind.MAYBE)
 
-    def pred(self, e: exp.Expr) -> Predicate:
+    def pred(self, e: exp.Expr) -> PredicateFormula:
         """
         Representation:
             True:   (1,0)
@@ -180,6 +263,7 @@ class Evaluator:
         """
 
         ctx = self.ctx
+        notebook = self.notebook
 
         match e:
             case exp.Paren(this=this):
@@ -201,7 +285,7 @@ class Evaluator:
                 t, f = self.pred(this)
                 return f, t
 
-            case _ if is_comparison_operator(e):
+            case _ if is_comparison(e):
                 if a := e.find(exp.All, exp.Any):
                     sub_expr = a.find(exp.Select, exp.SetOperation)
                     assert sub_expr is not None
@@ -224,7 +308,7 @@ class Evaluator:
                 u, v = ctx.fresh(Kind.VALUE), ctx.fresh(Kind.VALUE)
                 return u, ~u & v
 
-    def _unknown(self, pred: Predicate) -> Formula:
+    def _unknown(self, pred: PredicateFormula) -> Formula:
         t, f = pred
         return ~t & ~f
 

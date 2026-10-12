@@ -6,10 +6,24 @@ from typing import TypeIs
 from sqlglot import exp
 from sqlglot.optimizer.simplify import extract_date
 
-BOOLEAN_EXPRESSION = (exp.Predicate, exp.Connector, exp.Boolean, exp.Not)
-COMPARISON_OPERATOR = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)
+BOOLEAN_EXPRESSIONS = (exp.Predicate, exp.Connector, exp.Boolean, exp.Not, exp.Escape)
+COMPARISON_PREDICATES = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)
+STRICT_BINARY_PREDICATES = (
+    exp.Like,  # LIKE, ~~, NOT LIKE (negate=True)
+    exp.ILike,  # ILIKE, ~~*
+    exp.SimilarTo,
+    exp.RegexpLike,  # ~
+    exp.RegexpILike,  # ~*
+    exp.ArrayContainsAll,  # @>  (arrays, jsonb, ranges)
+    exp.ArrayContainedBy,  # <@
+    exp.ArrayOverlaps,  # &&
+    exp.JSONBContains,
+    exp.JSONBContainsTopKey,  # ?
+    exp.JSONBContainsAnyTopKeys,  # ?|
+    exp.JSONBContainsAllTopKeys,  # ?&
+)
 
-STRICT_BINARY = (
+STRICT_BINARY_OPERATORS = (
     exp.Add,
     exp.Sub,
     exp.Mul,
@@ -24,6 +38,20 @@ STRICT_BINARY = (
     exp.BitwiseRightShift,
 )
 type Comparison = exp.EQ | exp.NEQ | exp.GT | exp.GTE | exp.LT | exp.LTE
+type StrictBinaryPredicate = (
+    exp.Like
+    | exp.ILike
+    | exp.SimilarTo
+    | exp.RegexpLike
+    | exp.RegexpILike
+    | exp.ArrayContainsAll
+    | exp.ArrayContainedBy
+    | exp.ArrayOverlaps
+    | exp.JSONBContains
+    | exp.JSONBContainsTopKey
+    | exp.JSONBContainsAnyTopKeys
+    | exp.JSONBContainsAllTopKeys
+)
 
 
 def is_non_null_constant(expression: exp.Expr) -> bool:
@@ -37,13 +65,17 @@ def is_non_null_constant(expression: exp.Expr) -> bool:
 
 
 def is_boolean_expr(expression: exp.Expr):
-    return isinstance(expression, BOOLEAN_EXPRESSION)
+    return isinstance(expression, BOOLEAN_EXPRESSIONS)
 
 
-def is_comparison_operator(
+def is_comparison(
     expression: exp.Expr,
 ) -> TypeIs[Comparison]:
-    return isinstance(expression, COMPARISON_OPERATOR)
+    return isinstance(expression, COMPARISON_PREDICATES)
+
+
+def is_strict_binary_predicate(expression: exp.Expr) -> TypeIs[StrictBinaryPredicate]:
+    return isinstance(expression, STRICT_BINARY_PREDICATES)
 
 
 def is_subquery_predicate(expression: exp.Expr) -> TypeIs[exp.Any | exp.All | exp.Exists | exp.In]:
@@ -64,8 +96,8 @@ def is_join_group(node: exp.Expr) -> bool:
     )
 
 
-def is_strict_binary(e: exp.Expr) -> bool:
-    return isinstance(e, STRICT_BINARY)
+def is_strict_binary_operator(e: exp.Expr) -> bool:
+    return isinstance(e, STRICT_BINARY_OPERATORS)
 
 
 def is_plain_aggregate(select: exp.Select, aggregates: frozenset[str] | None = None) -> bool:

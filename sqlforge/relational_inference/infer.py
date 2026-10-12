@@ -9,9 +9,9 @@ from sqlglot.optimizer import Scope
 from . import transfert as t
 from .catalog import Catalog
 from .context import Context, Formula, Kind
-from .eval import Env
+from .eval import Env, Notebook
 from .exception import Unsupported
-from .expression import is_join_group, is_plain_aggregate
+from .expressions import is_join_group, is_plain_aggregate
 from .relation import Relation, Row, Subquery, Template
 
 
@@ -22,7 +22,7 @@ class ScopedAnalyzer:
         self.outer = outer
         self.ctx = analyzer.ctx
         self.side: list[Formula] = []
-        self.notebook: dict[exp.Expr, Formula] = {}
+        self.notebook: Notebook = Notebook(self.ctx, None)
 
     def analyse(self):
         scope = self.scope
