@@ -8,7 +8,6 @@ from typing import Any, ClassVar, Literal, TypedDict
 
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import Expr
-from sqlglot.optimizer.scope import Scope
 
 # Receipe
 
@@ -99,14 +98,3 @@ class TypedSQL:
     @property
     def name(self):
         return self.source.name
-
-
-@dataclass(frozen=True)
-class ScopedSQL:
-    source: SQL
-    scope: Scope
-
-
-@dataclass(frozen=True)
-class GeneratedSQL(SQL):
-    fn: str

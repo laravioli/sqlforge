@@ -1,1 +1,1 @@
-from .engine import Engine  # noqa: F401
+from .engine import AnalyzedSQL, Engine  # noqa: F401

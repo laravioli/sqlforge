@@ -48,7 +48,7 @@ class AsyncPGRecipe(Recipe):
             python_type_register,
             m_schema,
             typed,
-            APGFnGenerator(sqls=typed).generate(),
+            APGFnGenerator(sqls=engine.analyze()).generate(),
             engine,
         )
 

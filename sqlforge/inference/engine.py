@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cached_property
 
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
@@ -11,7 +12,7 @@ from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.simplify import simplify
 from sqlglot.schema import MappingSchema
 
-from sqlforge.core.structures import SQL, TypedSQL
+from sqlforge.core.structures import SQL, AttrName, ParamName, PythonType, TypedSQL
 from sqlforge.introspection import PGTypeRegister
 
 from .catalog import Catalog
@@ -68,13 +69,6 @@ def prepare_sql(sql: SQL, schema: MappingSchema) -> Scope:
 
 
 @dataclass(frozen=True)
-class Analysis:
-    columns: tuple[ColumnResult, ...]
-    bypassed: bool
-    error: str | None = None
-
-
-@dataclass(frozen=True)
 class ColumnResult:
     name: str
     type: str
@@ -83,6 +77,28 @@ class ColumnResult:
     @property
     def python(self) -> str:
         return self.nullability.python(self.type)
+
+
+@dataclass(frozen=True)
+class Analysis:
+    columns: tuple[ColumnResult, ...]
+    bypassed: bool
+    error: str | None = None
+
+
+@dataclass
+class AnalyzedSQL:
+    source: SQL
+    typed_params: dict[ParamName, PythonType]
+    analysis: Analysis
+
+    @property
+    def name(self):
+        return self.source.name
+
+    @cached_property
+    def typed_attrs(self) -> dict[AttrName, PythonType]:
+        return {c.name: c.python for c in self.analysis.columns}
 
 
 class Engine:
@@ -95,7 +111,10 @@ class Engine:
         return Engine(catalog=Catalog(type_register), statements=statements)
 
     def analyze(self):
-        return [self.analyze_one(stmt) for stmt in self.statements]
+        return [
+            AnalyzedSQL(stmt.source, stmt.typed_params, self.analyze_one(stmt))
+            for stmt in self.statements
+        ]
 
     def analyze_one(self, statement: TypedSQL) -> Analysis:
         attrs = list(statement.typed_attrs.items())
