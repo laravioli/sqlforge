@@ -16,9 +16,9 @@ from sqlforge.core.structures import (
     TransformedSQL,
     TypedSQL,
 )
+from sqlforge.inference import Engine
 from sqlforge.introspection import PgFetcher
 from sqlforge.introspection.schemas import mapping_schema
-from sqlforge.relational_inference import Engine
 
 from .converter import PythonTypeRegister, python_types
 from .generator import APGFnGenerator

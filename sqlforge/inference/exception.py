@@ -1,16 +1,14 @@
-class BottomException(Exception):
-    """
-    raise Bottom exception in place of a bottom element
-    """
+class Unsupported(Exception):
+    pass
 
 
-class SimplificationError(Exception): ...
+class ByPassed(Unsupported):
+    pass
 
 
-class StarNotExpanded(Exception): ...
+class UnknownColumn(Unsupported):
+    pass
 
 
-class SchemaError(Exception): ...
-
-
-class JoinNotInferred(Exception): ...
+class StarNotExpanded(Unsupported):
+    pass

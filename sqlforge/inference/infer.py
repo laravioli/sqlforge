@@ -1,231 +1,220 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import overload
+from functools import cached_property, reduce
+from typing import cast, overload
 
 from sqlglot import exp
-from sqlglot.optimizer import Scope, build_scope, optimize
-from sqlglot.optimizer.annotate_types import annotate_types
-from sqlglot.optimizer.qualify import qualify
-from sqlglot.optimizer.simplify import simplify
-from sqlglot.schema import MappingSchema
+from sqlglot.optimizer import Scope
 
-from sqlforge.core.structures import SQL
-
-from .exception import BottomException, SchemaError, StarNotExpanded
-from .expression import ExprInference
-from .join import JoinInference, JoinNotInferred
-from .lattice import CardSet, NullSet
-from .structures import AbstractState, meta_set_output
+from . import transfert as t
+from .catalog import Catalog
+from .context import Context, Formula, Kind
+from .eval import Env, Notebook
+from .exception import Unsupported
+from .expressions import is_join_group, is_plain_aggregate
+from .relation import Relation, Row, Subquery, Template
 
 
-@dataclass(init=False)
-class ScopedSQL:
-    parent: ScopedSQL | None
-    scope: Scope
-    user_schema: MappingSchema
-    expr_inference: ExprInference
-    join_inference: JoinInference
-    where_narrow: dict[tuple[str, str], NullSet]
-    null_sources: dict[str, AbstractState]
+class ScopedAnalyzer:
+    def __init__(self, analyzer: Analyzer, scope: Scope, outer: Env | None):
+        self.analyzer = analyzer
+        self.scope = scope
+        self.outer = outer
+        self.ctx = analyzer.ctx
+        self.side: list[Formula] = []
+        self.notebook: Notebook = Notebook(self.ctx, None)
 
+    def analyse(self):
+        scope = self.scope
+        match scope.expression:
+            case exp.Select():
+                relation = self.select()
+            case exp.SetOperation() as node:
+                left, right = (self.child(s, self.outer) for s in scope.set_operation_scopes)
+                relation = t.setop(node, left, right)
+            case node:
+                raise Unsupported(f"scope {type(node).__name__}")
+        keep = scope.is_correlated_subquery or scope.is_root
+        return relation if keep else relation.compress()
+
+    def child(self, scope: Scope, outer: Env | None):
+        """
+        Analyse a child scope
+                Params:
+                    scope: child to analyse, parent is paused and wait for the analysis
+                    outer: the env you want the child to look for external column
+        """
+        return type(self)(self.analyzer, scope, outer).analyse()
+
+    def select(self) -> Relation:
+        row = self._from()
+        row = self._where(row)
+        row = self._group_by(row)
+        row = self._having(row)
+        row = self._window(row)
+
+        return self._project(row)
+
+    def _from(self):
+        select = self.scope.expression
+        from_ = select.args.get("from_")
+        if from_ is None:
+            return Row.unit(self.ctx)
+        return self._join(select, Env(self, {}, self.outer))
+
+    def _join(self, expr: exp.Expr, env: Env) -> Row:
+        """
+        Rules:
+
+        - JOIN is left-associative and binds tighter than the comma:
+          a, b RIGHT JOIN c  =  a × (b ⟖ c)        a is never padded
+        - a LATERAL item sees every FROM item on its left; an ON sees only its two operands.
+        """
+        match expr:
+            case exp.Select():
+                left = self._join(expr.args.get("from_").this, env)  # type: ignore
+            case _ if is_join_group(expr):
+                left = self._join(expr.this, env)  # resolve to a subquery
+            case exp.Table() | exp.Subquery():
+                left = self.source(expr)
+            case exp.Lateral():
+                left = self.source(expr, env)
+            case _:
+                raise Unsupported(f"{expr} is not supported in a join")
+
+        joins = expr.args.get("joins")
+        if not joins:
+            return left
+
+        def step(acc: tuple[Row, Row], join: exp.Join) -> tuple[Row, Row]:
+            # closed: the comma trees already finished, left: the one being built
+            closed, left = acc
+            if t.JoinKind.from_expr(join) is t.JoinKind.COMMA:
+                closed = t.cross(closed, left)
+                right = self._join(join.this, env.extend(closed))
+                return closed, right
+
+            right = self._join(join.this, env.extend(closed, left))
+            on = join.args.get("on")
+
+            if on is not None:
+                t_on, _ = env.bind(left, right).evaluator().pred(on)
+            else:
+                t_on = self.ctx.true
+            return closed, t.join(self.ctx, join, left, right, t_on)
+
+        closed, tree = reduce(step, joins, (Row.unit(self.ctx), left))
+        return t.cross(closed, tree)
+
+    def _where(self, row: Row):
+        where = self.scope.expression.args.get("where")
+        if where is None:
+            return row
+        t_where, _ = Env(self, row.nulls, self.outer).evaluator().pred(where.this)
+        return t.filter_(row, t_where)
+
+    def _group_by(self, row: Row):
+        if is_plain_aggregate(self.scope.expression):  # type: ignore
+            no_input_row = self.ctx.fresh(Kind.EMPTY)
+            return Row(nulls=row.nulls, invariant=(~no_input_row).implies(row.invariant))
+        return row
+
+    def _having(self, row: Row):
+        return row
+
+    def _window(self, row: Row):
+        return row
+
+    def _project(self, row: Row) -> Relation:
+        select = cast(exp.Select, self.scope.expression)
+        ev = Env(self, row.nulls, self.outer).evaluator()
+
+        return Relation(
+            ctx=self.ctx,
+            columns=[e.alias_or_name for e in select.selects],
+            nulls=[ev.null(e) for e in select.selects],
+            invariant=row.invariant & self.ctx.all(self.side),
+        )
+
+    @cached_property
+    def _subqueries(self) -> dict[exp.Expr, Scope]:
+        return {s.expression: s for s in self.scope.subquery_scopes}
+
+    def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery:
+        return Subquery(self.child(self._subqueries[expr], env), self.ctx.fresh(Kind.EMPTY))
+
+    @overload
+    def source(self, node: exp.Table | exp.Subquery, outer: None = None) -> Row: ...
+    @overload
+    def source(self, node: exp.Lateral, outer: Env) -> Row: ...
+    def source(
+        self,
+        node: exp.Table | exp.Subquery | exp.Lateral,
+        outer: Env | None = None,
+    ) -> Row:
+        alias = node.alias_or_name
+        if alias not in self.scope.selected_sources:
+            raise Unsupported(f"source {type(node).__name__} {alias!r}")
+
+        _, src = self.scope.selected_sources[alias]
+
+        match node:
+            case exp.Table() if isinstance(node.this, exp.Identifier):
+                if isinstance(src, Scope):
+                    return self.analyzer.cte(src, alias)
+                else:
+                    return self.analyzer.scan(src)
+
+            case exp.Subquery():
+                return self.child(src, self.outer).row(alias)  # type: ignore
+
+            case exp.Lateral() if isinstance(node.this, exp.Subquery):  # not LATERAL fn
+                return self.child(src.subquery_scopes[0], outer).row(alias)  # type: ignore
+
+            case _:
+                raise Unsupported(f"source {type(node).__name__}")
+
+
+class Analyzer:
     def __init__(
         self,
-        parent: ScopedSQL | None,
-        scope: Scope,
-        user_schema: MappingSchema,
+        ctx: Context,
+        catalog: Catalog,
     ):
-        self.parent = parent
-        self.scope = scope
-        self.user_schema = user_schema
-        self.expr_inference = ExprInference(infer_column=self._column_nullability)
+        self.ctx = ctx
+        self.catalog = catalog
+        self._cte_cache: dict[Scope, Template] = {}
+        self._catalog_cache: dict[str, Template] = {}
 
-        self.join_inference = JoinInference(
-            infer_boolean=self.expr_inference.infer_boolean, query=scope.expression
-        )
-        self.where_narrow = {}
-        self.null_sources = {}
+    def run(self, scope: Scope):
+        return ScopedAnalyzer(self, scope, None).analyse()
 
-        for subquery_scope in self.scope.subquery_scopes:
-            meta_set_output(
-                subquery_scope.expression,  # type: ignore
-                lambda sub_scope=subquery_scope: self._infer_inner_scope(sub_scope),
-            )
+    def scan(self, tab: exp.Table) -> Row:
+        template = self._catalog_cache.get(tab.name)
 
-    @staticmethod
-    def root(
-        sql: SQL,
-        schema: MappingSchema,
-        full_optimize=False,
-    ):
-        expression = sql.expr.copy().unnest()
-        dialect = sql.dialect
-        ast = (
-            optimize(expression, schema=schema, dialect=dialect)
-            if full_optimize
-            else simplify(
-                annotate_types(
-                    qualify(expression, schema=schema, dialect=dialect),
-                    schema=schema,
-                    dialect=dialect,
-                ),
-                dialect=dialect,
-            )
-        )
-        scope = build_scope(ast)
-        assert scope is not None, (
-            f"build_scope returned None for: {expression.sql()!r} (type={type(expression).__name__})"
-        )
-        return ScopedSQL(parent=None, scope=scope, user_schema=schema)
+        if template is None:
+            table = self.catalog.tables[tab.name]
+            relation = Relation(
+                ctx=self.ctx,
+                columns=tuple(table.columns.keys()),
+                nulls=[
+                    self.ctx.fresh(Kind.BASE) if col.nullable else self.ctx.false
+                    for col in table.columns.values()
+                ],
+                invariant=self.ctx.true,
+            )  # compression is not needed
+            template = Template(relation)
+            self._catalog_cache[tab.name] = template
+            return relation.row(tab.alias)
 
-    def _infer_inner_scope(self, scope: Scope):
-        return ScopedSQL(parent=self, scope=scope, user_schema=self.user_schema).infer()
+        return template.materialize().row(tab.alias)
 
-    def infer(self) -> AbstractState:
-        scope_expression = self.scope.expression
+    def cte(self, cte_scope: Scope, alias: str) -> Row:
+        template = self._cte_cache.get(cte_scope)
 
-        # 1. set operations
-        if self.scope.set_operation_scopes:
-            left = self._infer_inner_scope(scope=self.scope.set_operation_scopes[0])
-            right = self._infer_inner_scope(scope=self.scope.set_operation_scopes[1])
-            return self._infer_set_scope(left, right)
+        if template is None:
+            relation = self.run(cte_scope)
+            template = self._cte_cache[cte_scope] = Template(relation)
+            return relation.row(alias)
 
-        # 2. ctes and derived tables
-        for name, scope in self.scope.sources.items():
-            if scope in self.scope.cte_scopes:
-                pass
-                # TODO: find how to handle recursive then just put the result in null_sources
-            if scope in self.scope.derived_table_scopes:
-                self.null_sources[name] = self._infer_inner_scope(scope=scope)
-
-        # 3. joins
-        try:
-            self.join_inference.infer()
-        except JoinNotInferred:
-            raise NotImplementedError
-
-        # 4. where clause
-        if self.scope.expression.args.get("where"):
-            self._infer_where()
-
-        # 5. group_by
-
-        # 6. having
-
-        # 6. select
-        assert isinstance(
-            scope_expression, exp.Selectable
-        )  # with dml and returning, it should be an if
-        return self._infer_select_list(scope_expression.selects)
-
-    def _infer_set_scope(self, left: AbstractState, right: AbstractState):
-        match self.scope.expression:
-            case exp.Union():
-                return AbstractState(
-                    [(k1, v1 | v2) for (k1, v1), (_, v2) in zip(left, right, strict=True)],
-                    card=left.card | right.card,
-                )
-            case exp.Intersect():
-                # https://github.com/tobymao/sqlglot/issues/8390
-                card = None
-                output = []
-                for (k1, v1), (_, v2) in zip(left, right, strict=True):
-                    try:
-                        output.append((k1, v1 & v2))
-                    except BottomException:
-                        output.append((k1, NullSet.MAYBE_NULL))
-                        card = CardSet.EMPTY
-                return AbstractState(output, card=card or (left.card & right.card))
-
-            case exp.Except():
-                return AbstractState(
-                    [(k1, v1 - v2) for (k1, v1), (_, v2) in zip(left, right, strict=True)],
-                    card=left.card - right.card,
-                )
-            case _:
-                assert False
-
-    def _infer_where(self):
-        # predicate = self.join_inference.folded_predicate
-        pass
-
-    def _infer_select_list(self, expressions: list[exp.Expr]) -> AbstractState:
-        output: list[tuple[str, NullSet]] = []
-
-        for select in expressions:
-            if not select.is_star:
-                output.append((select.alias_or_name, self.expr_inference.infer_nullability(select)))
-            else:
-                match select:
-                    case exp.Column(table=table):
-                        output.extend(self._star_expand(table))
-                    case exp.Star():
-                        for source in self.join_inference.ordered_sources:
-                            output.extend(self._star_expand(source))
-                    case _:
-                        # TODO: handle exp.Dot
-                        raise StarNotExpanded()
-
-        return AbstractState(output)
-
-    def _star_expand(self, table: str):
-        source = self.scope.sources.get(table)
-        if source is None:
-            if not self.scope.is_correlated_subquery:
-                raise StarNotExpanded()
-            assert self.parent
-            yield from self.parent._star_expand(table)
-
-        pairs = (
-            self._schema_nullability(source).items()
-            if isinstance(source, exp.Table)
-            else self.null_sources[table]
-        )
-        for name, ns in pairs:
-            yield name, self.join_inference.null_extension.get(table, ns)
-
-    def _column_nullability(self, table: str, column: str | None = None) -> NullSet:
-
-        source = self.scope.sources.get(table)
-
-        if source is not None:
-            join_extension = self.join_inference.null_extension.get(table)
-            if join_extension is not None:
-                return join_extension
-
-            if column is None:  # table_column
-                return NullSet.NON_NULL
-
-            match source:
-                case exp.Table():
-                    return self._schema_nullability(source, column)
-
-                case Scope():
-                    if source in self.scope.derived_table_scopes:
-                        return self.null_sources[table].get(column)
-                    return NullSet.MAYBE_NULL
-
-        else:  # external column
-            parent = self.parent
-            assert parent
-            return parent._column_nullability(table, column)
-
-    @overload
-    def _schema_nullability(self, table: exp.Table, column: str) -> NullSet: ...
-    @overload
-    def _schema_nullability(self, table: exp.Table, column: None = None) -> dict[str, NullSet]: ...
-    def _schema_nullability(
-        self, table: exp.Table, column: str | None = None
-    ) -> NullSet | dict[str, NullSet]:
-        if column is None:
-            schema = {
-                name: self._schema_nullability(table, name)
-                for name in self.user_schema.column_names(table)
-            }
-            if len(schema) == 0:
-                raise SchemaError()  # this is required for star expansion
-            return schema
-
-        dtype = self.user_schema.get_column_type(table, column)
-        nullable = dtype.args.get("nullable")
-        return NullSet.NON_NULL if nullable is False else NullSet.MAYBE_NULL
+        return template.materialize().row(alias)
