@@ -16,9 +16,9 @@ from sqlforge.core.structures import (
     TransformedSQL,
     TypedSQL,
 )
-from sqlforge.inference import Engine
-from sqlforge.introspection import PgFetcher, PgSchemaGenerator
+from sqlforge.introspection import PgFetcher
 from sqlforge.introspection.schemas import mapping_schema
+from sqlforge.relational_inference import Engine
 
 from .converter import PythonTypeRegister, python_types
 from .generator import APGFnGenerator
@@ -41,6 +41,7 @@ class AsyncPGRecipe(Recipe):
         python_type_register = python_types(register=pg_type_register)
         m_schema = mapping_schema(pg_type_register)
         typed = self._convert(prep_queries, python_type_register)
+        engine = Engine.from_register(pg_type_register, typed)
         return (
             inputs,
             pg_type_register,
@@ -48,6 +49,7 @@ class AsyncPGRecipe(Recipe):
             m_schema,
             typed,
             APGFnGenerator(sqls=typed).generate(),
+            engine,
         )
 
     @classmethod

@@ -18,8 +18,8 @@ type VarName = str
 
 class Kind(Enum):
     BASE = "b"
-    VALUE = "v"
     MAYBE = "m"
+    TRUTH = "t"
     MATCH = "ma"
     EMPTY = "e"
     UNION = "u"

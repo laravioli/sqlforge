@@ -12,6 +12,7 @@ from sqlglot.optimizer.simplify import simplify
 from sqlglot.schema import MappingSchema
 
 from sqlforge.core.structures import SQL, TypedSQL
+from sqlforge.introspection import PGTypeRegister
 
 from .catalog import Catalog
 from .context import Context
@@ -88,6 +89,10 @@ class Engine:
     def __init__(self, catalog: Catalog, statements: list[TypedSQL]):
         self.catalog = catalog
         self.statements = statements
+
+    @staticmethod
+    def from_register(type_register: PGTypeRegister, statements: list[TypedSQL]):
+        return Engine(catalog=Catalog(type_register), statements=statements)
 
     def analyze(self):
         return [self.analyze_one(stmt) for stmt in self.statements]

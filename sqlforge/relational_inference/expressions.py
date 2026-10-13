@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import TypeIs
+from typing import Literal, TypeIs
 
 from sqlglot import exp
 from sqlglot.optimizer.simplify import extract_date
@@ -65,6 +65,7 @@ def is_non_null_constant(expression: exp.Expr) -> bool:
 
 
 def is_boolean_expr(expression: exp.Expr):
+    # TODO: add a check that user defined function doesn't override this
     return isinstance(expression, BOOLEAN_EXPRESSIONS)
 
 
@@ -87,7 +88,11 @@ def is_true(expression: exp.Expr) -> bool:
 
 
 def is_row(expression: exp.Expr) -> bool:
-    return isinstance(expression, exp.Anonymous) and expression.name.lower() == "row"
+    return (
+        isinstance(expression, exp.Tuple)
+        or isinstance(expression, exp.Anonymous)
+        and expression.name.lower() == "row"
+    )
 
 
 def is_join_group(node: exp.Expr) -> bool:
@@ -133,3 +138,14 @@ def _own_calls(node: exp.Expr) -> Iterator[exp.Expr]:
 def _is_window_call(f: exp.Expr) -> bool:
     node = f.parent if isinstance(f.parent, exp.Filter) else f
     return isinstance(node.parent, exp.Window) and node.arg_key == "this"
+
+
+def quantifier(e: exp.Expr) -> tuple[Literal["any", "all"], exp.Expr] | None:
+    match e:
+        case exp.Any(this=inner):
+            return "any", inner.unnest()
+        case exp.All(this=inner):
+            return "all", inner.unnest()
+        case exp.Anonymous() if e.name.upper() == "ALL" and len(e.expressions) == 1:
+            return "all", (e.expressions[0]).unnest()
+    return None

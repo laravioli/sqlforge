@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
-from typing import Protocol
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Literal, Protocol
 
 from sqlglot import exp
 
@@ -13,11 +13,15 @@ from .expressions import (
     is_boolean_expr,
     is_comparison,
     is_non_null_constant,
+    is_row,
     is_strict_binary_operator,
+    quantifier,
 )
+from .notebook import Notebook
 from .relation import Key, Row, Subquery
 
 type PredicateFormula = tuple[Formula, Formula]
+type NullFormula = Formula
 
 
 class ScopeProtocol(Protocol):
@@ -71,81 +75,6 @@ class Env:
         raise UnknownColumn((alias, "*"))
 
 
-@dataclass
-class Notebook:
-    """
-    Store reusable facts about a row, from their creation to the end of a scope\n
-    If a fact is not reusable, a new var is returned instead.
-    """
-
-    ctx: Context
-    functions: None  # TODO
-    _vars: dict[tuple[str, *tuple[exp.Expr, ...]], Formula] = field(default_factory=dict)
-    _reusables: dict[exp.Expr, bool] = field(default_factory=dict)
-
-    def _var(self, fact: tuple[str, *tuple[exp.Expr, ...]], kind: Kind) -> Formula:
-        var = self._vars.get(fact)
-        if var is None:
-            var = self._vars[fact] = self.ctx.fresh(kind)
-        return var
-
-    def compare(self, op: Comparison, left: exp.Expr, right: exp.Expr) -> Formula:
-        if not (self._reusable(left) and self._reusable(right)):
-            return self.ctx.fresh(Kind.VALUE)
-        less, equal, greater = self._order(left, right)
-        match op:
-            case exp.EQ():
-                return equal
-            case exp.NEQ():
-                return ~equal
-            case exp.LT():
-                return less
-            case exp.GT():
-                return greater
-            case exp.LTE():
-                return ~greater
-            case exp.GTE():
-                return ~less
-
-    def _order(self, left: exp.Expr, right: exp.Expr) -> tuple[Formula, Formula, Formula]:
-        if left == right:
-            return self.ctx.false, self.ctx.true, self.ctx.false
-
-        first, second = sorted((left, right), key=hash)
-        equal = self._var(("eq", first, second), Kind.VALUE)
-        below = self._var(("lt", first, second), Kind.VALUE)
-        less, greater = ~equal & below, ~equal & ~below
-
-        return (less, equal, greater) if first == left else (greater, equal, less)
-
-    def holds(self, tag: str, *operands: exp.Expr):
-        if not all(self._reusable(o) for o in operands):
-            return self.ctx.fresh(Kind.VALUE)
-        return self._var((f"{tag}_h", *operands), Kind.VALUE)
-
-    def unknown(self, tag: str, expr: exp.Expr):
-        if not self._reusable(expr):
-            return self.ctx.fresh(Kind.MAYBE)
-        return self._var((f"{tag}_u", expr), Kind.MAYBE)
-
-    def _reusable(self, expr: exp.Expr):
-        reusable = self._reusables.get(expr)
-        if reusable is None:
-            reusable = not (bool(expr.find(exp.Query)) or self._volatile(expr))
-        return reusable
-
-    def _volatile(self, expr: exp.Expr):
-        if self.functions is None:
-            test = lambda e: isinstance(e, (exp.Anonymous, exp.Rand, exp.Uuid))
-        else:
-            test = lambda e: True  # TODO
-
-        for fn in expr.find_all(exp.Func):
-            if test(fn):
-                return True
-        return False
-
-
 @dataclass(frozen=True, slots=True)
 class Evaluator:
     env: Env
@@ -158,9 +87,8 @@ class Evaluator:
     def notebook(self) -> Notebook:
         return self.env.scope.notebook
 
-    def null(self, e: exp.Expr) -> Formula:
+    def null(self, e: exp.Expr) -> NullFormula:
         ctx = self.ctx
-        notebook = self.notebook
 
         match e:
             case exp.Paren(this=this) | exp.Alias(this=this):
@@ -172,7 +100,7 @@ class Evaluator:
                 return self.env.null((table, name))
 
             case exp.TableColumn():
-                return ctx.fresh(Kind.MAYBE) & ctx.all(self.env.fields(e.name))
+                return self.notebook.null("row", e) & ctx.all(self.env.fields(e.name))
 
             case exp.Parameter(this=this):
                 return ctx.param(this.to_py())  # type: ignore
@@ -180,16 +108,11 @@ class Evaluator:
             case exp.Null():
                 return ctx.true
 
-            case _ if is_non_null_constant(e):
+            case _ if is_non_null_constant(e) or is_row(e):
                 return ctx.false
 
             case exp.Count():
                 return ctx.false
-
-            case (
-                exp.Window(this=this) | exp.Filter(this=this)
-            ):  # count(*) OVER/FILTER → the aggregate decides
-                return self.null(this)
 
             case exp.Subquery(this=this):
                 return self.null(this)  # unwrap
@@ -204,31 +127,11 @@ class Evaluator:
 
             case exp.Nullif(this=left, expression=right):
                 l_null, r_null = self.null(left), self.null(right)
-                eq = ctx.fresh(Kind.VALUE)  # NOTE: ill dot notebook later, so rework with notebook
+                eq = self.notebook.compare(exp.EQ, left, right)
                 return l_null | (~r_null & eq)
 
-            case exp.Case(this=this):
-                if this is None:
-
-                    def transform(i):
-                        return self.pred(i.this)
-                else:
-
-                    def transform(i):
-                        return self.pred(exp.EQ(this=this.copy(), expression=i.this.copy()))
-
-                _ifs = (
-                    (transform(i), self.null(i.args.get("true")))  # type: ignore
-                    for i in e.args.get("ifs", [])
-                )
-                out, false_before = ctx.false, ctx.true
-
-                for (t, _), value in _ifs:
-                    out |= false_before & t & value
-                    false_before &= ~t
-                default = self.null(e.args.get("default") or exp.Null())
-
-                return out | (false_before & default)
+            case exp.Case():
+                return ctx.any(taken & self.null(r) for taken, r in self._case(e))
 
             case _ if is_boolean_expr(e):
                 return self._unknown(self.pred(e))
@@ -240,77 +143,219 @@ class Evaluator:
                 return self.null(this)
 
             case exp.DPipe(this=l, expression=r):
-                return ctx.fresh(Kind.MAYBE) & (self.null(l) | self.null(r))
+                return self.notebook.null("||", e) & (self.null(l) | self.null(r))
 
             case _ if is_strict_binary_operator(e):
                 return self.null(e.this) | self.null(e.expression)
 
-            case exp.Func():
-                return self._func(e)
-
             case exp.Star():
                 raise StarNotExpanded("* must be expanded")
+
+            # this block should stay here
+            case exp.Func():
+                return self._func(e)
 
             case _:
                 return ctx.fresh(Kind.MAYBE)
 
     def pred(self, e: exp.Expr) -> PredicateFormula:
         """
-        Representation:
+        dual-rail encoding:
             True:   (1,0)
             False:  (0,1)
             Unknow: (0,0)
         """
 
         ctx = self.ctx
-        notebook = self.notebook
 
         match e:
             case exp.Paren(this=this):
                 return self.pred(this)
 
             case exp.And(this=left, expression=right):
-                t_l, f_l = self.pred(left)
-                t_r, f_r = self.pred(right)
-
-                return t_l & t_r, f_l | f_r
+                tl, fl = self.pred(left)
+                tr, fr = self.pred(right)
+                return tl & tr, fl | fr
 
             case exp.Or(this=left, expression=right):
-                t_l, f_l = self.pred(left)
-                t_r, f_r = self.pred(right)
-
-                return t_l | t_r, f_l & f_r
+                tl, fl = self.pred(left)
+                tr, fr = self.pred(right)
+                return tl | tr, fl & fr
 
             case exp.Not(this=this):
                 t, f = self.pred(this)
                 return f, t
 
-            case _ if is_comparison(e):
-                if a := e.find(exp.All, exp.Any):
-                    sub_expr = a.find(exp.Select, exp.SetOperation)
-                    assert sub_expr is not None
-                    sub = self._subquery(sub_expr)
-                    match a:
-                        case exp.All():
-                            return ctx.true, ctx.false
-                        case exp.Any():
-                            return ctx.true, ctx.false
-                else:
-                    return ctx.true, ctx.false
+            case exp.Null():
+                return ctx.false, ctx.false
 
             case exp.Boolean(this=this):
                 return (ctx.true, ctx.false) if this else (ctx.false, ctx.true)
 
-            case exp.Null():
-                return ctx.false, ctx.false
+            case exp.Is():
+                return self._is(e)
+
+            case _ if is_comparison(e):
+                return self._compare(type(e), e.left, e.right)
+
+            case exp.NullSafeEQ(this=left, expression=right):
+                t = self._not_distinct(left, right)
+                return (t, ~t)
+
+            case exp.NullSafeNEQ(this=left, expression=right):
+                t = self._not_distinct(left, right)
+                return (~t, t)
+
+            case exp.In():
+                return self._in(e)
+
+            case exp.Exists(this=query):
+                sub = self._subquery(query.unnest())
+                return ~sub.empty, sub.empty
+
+            case exp.Case():
+                paths = [(taken, self.pred(r)) for taken, r in self._case(e)]
+                return (
+                    ctx.any(taken & t for taken, (t, _) in paths),
+                    ctx.any(taken & f for taken, (_, f) in paths),
+                )
+
+            case exp.Coalesce():
+                return self._coalesce([e.this, *e.expressions])
+
+            case exp.Between():
+                # simplified by sqlglot
+                return self._between(e)
+
+            case _ if is_boolean_expr(e):
+                # avoid infinite loop with null
+                return self._fresh_pred()
 
             case _:
-                u, v = ctx.fresh(Kind.VALUE), ctx.fresh(Kind.VALUE)
-                return u, ~u & v
+                return self._value(e)
 
-    def _unknown(self, pred: PredicateFormula) -> Formula:
+    def _unknown(self, pred: PredicateFormula) -> NullFormula:
+        """UNKNOWN as a null value"""
         t, f = pred
         return ~t & ~f
+
+    def _fresh_pred(self) -> PredicateFormula:
+        """fresh dual-rail encoding"""
+        u, v = self.ctx.fresh(Kind.TRUTH), self.ctx.fresh(Kind.TRUTH)
+        return u, ~u & v
+
+    def _value(self, e: exp.Expr) -> PredicateFormula:
+        known = ~self.null(e)
+        holds = self.notebook.holds("value", e)
+        return known & holds, known & ~holds
+
+    def _compare(self, op: type[Comparison], left: exp.Expr, right: exp.Expr) -> PredicateFormula:
+        if (q := quantifier(right)) is not None:
+            return self._quantified(op, left, *q)
+
+        match left, right:
+            case _ if is_row(left) and is_row(right):
+                return self._row_compare(op, left.expressions, right.expressions)
+
+            case _ if is_row(left) or is_row(right):
+                return self._fresh_pred()
+
+            case (exp.Boolean() as lit, value) | (value, exp.Boolean() as lit) if op in (
+                exp.EQ,
+                exp.NEQ,
+            ):
+                t, f = self.pred(value)
+                return (t, f) if lit.this == (op is exp.EQ) else (f, t)
+
+            case _:
+                return self._scalar_compare(op, left, right)
+
+    def _scalar_compare(self, op: type[Comparison], x: exp.Expr, y: exp.Expr) -> PredicateFormula:
+        known = ~self.null(x) & ~self.null(y)
+        holds = self.notebook.compare(op, x, y)
+        return known & holds, known & ~holds
+
+    def _row_compare(
+        self, op: type[Comparison], left: Sequence[exp.Expr], right: Sequence[exp.Expr]
+    ) -> PredicateFormula:
+        return self._fresh_pred()  # TODO
+
+    def _quantified(
+        self, op: type[exp.Expr], left: exp.Expr, quantifier: Literal["any", "all"], inner: exp.Expr
+    ) -> PredicateFormula:
+        return self._fresh_pred()  # TODO
+
+    def _is(self, expr: exp.Is) -> PredicateFormula:
+        left, right, negate = expr.this, expr.expression, bool(expr.args.get("negate"))
+        match right:
+            case exp.Null():
+                match left:
+                    case _ if is_row(left):
+                        fields = [self.null(x) for x in left.expressions]
+                    case exp.TableColumn(name=name):
+                        fields = self.env.fields(name)
+                    case _:
+                        n = self.null(left)
+                        return (~n, n) if negate else (n, ~n)
+                hit = self.ctx.all(~f for f in fields) if negate else self.ctx.all(fields)
+                return hit, ~hit
+            case exp.Boolean(this=value):
+                t, f = self.pred(left)
+                hit = t if value else f
+                return (~hit, hit) if negate else (hit, ~hit)
+        return self._fresh_pred()
+
+    def _not_distinct(self, left: exp.Expr, right: exp.Expr):
+        if is_row(left) and is_row(right):
+            lr, rr = left.expressions, right.expressions
+            # postgres would error if length mismatch
+            return self.ctx.all(self._same(x, y) for x, y in zip(lr, rr, strict=True))
+        else:
+            return self._same(left, right)
+
+    def _same(self, left: exp.Expr, right: exp.Expr) -> Formula:
+        nl, nr = self.null(left), self.null(right)
+        return (nl & nr) | (~nl & ~nr & self.notebook.compare(exp.EQ, left, right))
+
+    def _in(self, expr: exp.Expr):
+        return self._fresh_pred()  # TODO
+
+    def _between(self, e: exp.Between) -> PredicateFormula:
+        x, low, high = e.this, e.args["low"], e.args["high"]
+        (t1, f1), (t2, f2) = self._compare(exp.GTE, x, low), self._compare(exp.LTE, x, high)
+        true, false = t1 & t2, f1 | f2
+        if e.args.get("symmetric"):
+            (t3, f3), (t4, f4) = self._compare(exp.GTE, x, high), self._compare(exp.LTE, x, low)
+            true, false = true | (t3 & t4), false & (f3 | f4)
+        return true, false
+
+    def _test(self, op: type[exp.Expr], *operands: exp.Expr) -> PredicateFormula:
+        known = self.ctx.all(~self.null(o) for o in operands)
+        holds = self.notebook.holds(op.__name__, *operands)
+        return known & holds, known & ~holds
+
+    def _case(self, expr: exp.Case) -> list[tuple[Formula, exp.Expr]]:
+        this = expr.this
+        paths, none_taken = [], self.ctx.true
+        for i in expr.args.get("ifs", []):
+            cond = i.this if this is None else exp.EQ(this=this.copy(), expression=i.this.copy())
+            t, _ = self.pred(cond)
+            paths.append((none_taken & t, i.args["true"]))
+            none_taken &= ~t
+        paths.append((none_taken, expr.args.get("default") or exp.Null()))
+        return paths
+
+    def _coalesce(self, items: list[exp.Expr]) -> PredicateFormula:
+        """coalesce as predicate"""
+        ctx = self.ctx
+        true = false = ctx.false
+        pending = ctx.true
+        for item in items:
+            t, f = self.pred(item)
+            true |= pending & t
+            false |= pending & f
+            pending &= ~t & ~f
+        return true, false
 
     def _func(self, e: exp.Func):
         return self.ctx.fresh(Kind.MAYBE)
