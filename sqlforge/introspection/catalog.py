@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
 
+from sqlglot import exp
 from sqlglot.expressions.datatypes import DataType
 from sqlglot.schema import MappingSchema
 
 from .structures import *
 
 type Column = PGAttribute
+
+DEFAULT_SEARCH_PATH = ("pg_catalog", "public")
 
 
 @dataclass(frozen=True)
@@ -58,17 +61,37 @@ def sources(register: PGTypeRegister) -> Generator[Table | View]:
                 yield View(t.ns, t.name, columns, t.query)
 
 
-def mapping_schema(register: PGTypeRegister) -> MappingSchema:
+class SearchPathSchema(MappingSchema):
+    """ns -> table -> columns; an unqualified table is looked up along the search path"""
+
+    def __init__(self, mapping: dict, search_path: Sequence[str]):
+        super().__init__(mapping, dialect="postgres", normalize=False)
+        self.search_path = tuple(search_path)
+
+    def find(
+        self, table: exp.Table, raise_on_missing: bool = True, ensure_data_types: bool = False
+    ) -> Any | None:
+        if not table.db:
+            for ns in self.search_path:
+                found = super().find(exp.table_(table.name, db=ns), False, ensure_data_types)
+                if found is not None:
+                    return found
+        return super().find(table, raise_on_missing, ensure_data_types)
+
+
+def mapping_schema(
+    register: PGTypeRegister, search_path: Sequence[str] = DEFAULT_SEARCH_PATH
+) -> SearchPathSchema:
 
     def column(attr: Column) -> DataType:
         dt = _sqlglot_type(attr.attr_type, register)
         dt.set("nullable", attr.nullable)
         return dt
 
-    return MappingSchema(
-        {rel.name: {k: column(v) for k, v in rel.columns.items()} for rel in sources(register)},
-        dialect="postgres",
-    )
+    mapping: dict[str, dict[str, dict[str, DataType]]] = {}
+    for rel in sources(register):
+        mapping.setdefault(rel.ns, {})[rel.name] = {k: column(v) for k, v in rel.columns.items()}
+    return SearchPathSchema(mapping, search_path)
 
 
 def _sqlglot_type(oid: Oid, register: PGTypeRegister) -> DataType:

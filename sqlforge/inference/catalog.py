@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlforge.introspection.catalog import Table, View, mapping_schema, sources
+from sqlforge.introspection.catalog import DEFAULT_SEARCH_PATH, Table, View, mapping_schema, sources
 from sqlforge.introspection.structures import (
     CompositeKind,
     CompositeType,
@@ -13,10 +13,10 @@ from .relation import ViewStore
 
 
 class Catalog:
-    def __init__(self, type_register: PGTypeRegister, search_path=("pg_catalog", "public")):
+    def __init__(self, type_register: PGTypeRegister, search_path=DEFAULT_SEARCH_PATH):
         self.search_path: tuple[str, ...] = search_path  # TODO: would need an override in config
         self.views = ViewStore()
-        self.mapping_schema = mapping_schema(register=type_register)
+        self.mapping_schema = self.mapping_schema = mapping_schema(type_register, search_path)
 
         self._types = type_register
         self._types_by_name: dict[tuple[str, str], PGType] = {
@@ -26,12 +26,12 @@ class Catalog:
             (s.ns, s.name): s for s in sources(type_register)
         }
 
-    def _resolve[T](self, table: dict[tuple[str, str], T], ns: str | None, name: str) -> T | None:
+    def _resolve[T](self, types: dict[tuple[str, str], T], ns: str | None, typ: str) -> T | None:
         spaces = (ns,) if ns else self.search_path
-        return next((t for s in spaces if (t := table.get((s, name))) is not None), None)
+        return next((t for s in spaces if (t := types.get((s, typ))) is not None), None)
 
-    def lookup(self, key: tuple[str | None, str]):
-        return self._resolve(self._types_by_name, key[0], key[1])
+    def lookup(self, typ: str, ns: str | None = None):
+        return self._resolve(self._types_by_name, ns, typ)
 
     def source(self, key: tuple[str | None, str]):
         return self._resolve(self._sources, key[0], key[1])
