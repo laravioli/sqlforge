@@ -123,3 +123,56 @@ class Subquery:
     @property
     def nulls(self):
         return self.relation.nulls
+
+
+class ViewStore:
+    def __init__(self):
+        self._ctx = Context()
+        self._store: dict[tuple[str, str], StoredView] = {}
+
+    def import_(self, dest: Context, key: tuple[str, str]) -> Relation | None:
+        """
+        viewstore -> currrent analysis
+        """
+        view = self._store.get(key)
+        if view is None:
+            return
+
+        src = self._ctx
+        dest.declare(sorted(view.support, key=src.bdd.level_of_var))
+        fs = src.copy(view.formulas, dest)
+
+        return Relation(ctx=dest, columns=view.columns, nulls=fs[:-1], invariant=fs[-1])
+
+    def export(self, src: Context, key: tuple[str, str], rel: Relation):
+        """
+        current analysis -> viewstore
+        """
+        rel = rel.compress()
+        dest = self._ctx
+        order = sorted(rel.support, key=src.bdd.level_of_var)
+        rename = {v: f"_{Context.kind(v).value}{i}" for i, v in enumerate(order)}
+        src.declare(rename.values())
+        dest.declare(rename.values())
+        fs = [src.bdd.let(rename, f) for f in rel.formulas] if rename else rel.formulas
+        fs = src.copy(fs, dest)
+
+        self._store[key] = StoredView(columns=rel.columns, nulls=fs[:-1], invariant=fs[-1])
+
+
+@dataclass
+class StoredView:
+    columns: Sequence[str]
+    nulls: Sequence[Formula]
+    invariant: Formula
+
+    @property
+    def formulas(self):
+        """
+        [*nulls, invariant]
+        """
+        return [*self.nulls, self.invariant]  # dont forget card when u add feature
+
+    @property
+    def support(self):
+        return support([*self.nulls, self.invariant])

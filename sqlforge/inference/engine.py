@@ -41,9 +41,7 @@ class Engine:
             scope = prepare_sql(statement.source, self.catalog.mapping_schema)
             bypassed = False
 
-            relation = Analyzer(Context(), self.catalog).run(scope)
-            nulls = relation.result()
-            print(relation.columns)
+            nulls = Analyzer(Context(), self.catalog).run(scope).result()
             if len(attrs) != len(nulls):
                 raise Unsupported(f"{len(nulls)} columns inferred, {len(attrs)} expected")
 
