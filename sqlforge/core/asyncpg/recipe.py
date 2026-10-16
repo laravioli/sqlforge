@@ -135,7 +135,7 @@ def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
     return TypedSQL(
         source=sql.source.source,
         typed_params={p: reg[pp.oid] for p, pp in zip(params, pparams)},
-        typed_attrs={attr.name: reg[attr.type.oid] for attr in pattrs},
+        typed_attrs=[(attr.name, reg[attr.type.oid]) for attr in pattrs],
     )
 
 

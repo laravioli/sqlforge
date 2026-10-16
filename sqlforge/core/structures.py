@@ -93,7 +93,7 @@ type PythonType = str
 class TypedSQL:
     source: SQL
     typed_params: dict[ParamName, PythonType]
-    typed_attrs: dict[AttrName, PythonType]
+    typed_attrs: list[tuple[AttrName, PythonType]]
 
     @property
     def name(self):

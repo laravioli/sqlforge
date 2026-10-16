@@ -93,7 +93,7 @@ class APGFnGenerator:
 
         params = self._build_fn_params(sql)
         body = BodyText(_call("fetchrow", sql, "timeout=timeout", "record_class=record_class"))
-        return_ = FnReturnText().add(f"{_row(sql.typed_attrs.values())} | None")
+        return_ = FnReturnText().add(f"{_row(t[1] for t in sql.typed_attrs)} | None")
         return FnText(sql.source.name.lower(), params, body, return_).gen()
 
     def _many(self, sql: AnalyzedSQL):
@@ -116,7 +116,7 @@ class APGFnGenerator:
         """
         params = self._build_fn_params(sql)
         body = BodyText(_call("fetch", sql, "timeout=timeout", "record_class=record_class"))
-        return_ = FnReturnText().add(f"list[{_row(sql.typed_attrs.values())}]")
+        return_ = FnReturnText().add(f"list[{_row(t[1] for t in sql.typed_attrs)}]")
         return FnText(sql.name.lower(), params, body, return_).gen()
 
     def _fetchval(self, sql: AnalyzedSQL):
@@ -139,7 +139,9 @@ class APGFnGenerator:
             "column", f"typing.Literal[{columns}]", "0"
         )
         body = BodyText(_call("fetchval", sql, "column=column", "timeout=timeout"))
-        values = list(dict.fromkeys(sql.typed_attrs.values()))  # distinct types, in column order
+        values = list(
+            dict.fromkeys(t[1] for t in sql.typed_attrs)
+        )  # distinct types, in column order
         return_ = FnReturnText().add(" | ".join([*values, "None"]))
         return FnText(sql.source.name.lower(), params, body, return_).gen()
 
@@ -176,7 +178,7 @@ class APGFnGenerator:
         body = BodyText(
             f"return await conn.fetchmany({sql.source.name.upper()}, args, timeout=timeout, record_class=record_class)"
         )
-        return_ = FnReturnText().add(f"list[{_row(sql.typed_attrs.values())}]")
+        return_ = FnReturnText().add(f"list[{_row(t[1] for t in sql.typed_attrs)}]")
         return FnText(sql.source.name.lower(), params, body, return_).gen()
 
     def _exec(self, sql: AnalyzedSQL):

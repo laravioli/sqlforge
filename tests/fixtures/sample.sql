@@ -89,3 +89,6 @@ WITH accepted_friendship AS (
 )
 INSERT INTO notification (sender_id, receiver_id, friendship_id, type)
 SELECT receiver_id, sender_id, id, 'friend_request_accepted' FROM accepted_friendship;
+
+--name: test_user_view:many
+select * from user_base ub left join user_preference up on true;
