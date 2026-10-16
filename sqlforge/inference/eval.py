@@ -232,7 +232,7 @@ class Evaluator:
                 return self._fresh_pred()
 
             case _:
-                return self._value(e)
+                return self._memorized(e)
 
     def _unknown(self, pred: PredicateFormula) -> NullFormula:
         """UNKNOWN as a null value"""
@@ -244,11 +244,12 @@ class Evaluator:
         u, v = self.ctx.fresh(Kind.TRUTH), self.ctx.fresh(Kind.TRUTH)
         return u, ~u & v
 
-    def _value(self, e: exp.Expr) -> PredicateFormula:
+    def _memorized(self, e: exp.Expr) -> PredicateFormula:
         known = ~self.null(e)
         holds = self.notebook.holds("value", e)
         return known & holds, known & ~holds
 
+    # implement other comparison , add composite introspection
     def _compare(self, op: type[Comparison], left: exp.Expr, right: exp.Expr) -> PredicateFormula:
         if (q := quantifier(right)) is not None:
             return self._quantified(op, left, *q)
@@ -268,23 +269,74 @@ class Evaluator:
                 return (t, f) if lit.this == (op is exp.EQ) else (f, t)
 
             case _:
-                return self._scalar_compare(op, left, right)
+                return self._default_compare(op, left, right)
 
-    def _scalar_compare(self, op: type[Comparison], x: exp.Expr, y: exp.Expr) -> PredicateFormula:
-        known = ~self.null(x) & ~self.null(y)
+    def _default_compare(self, op: type[Comparison], x: exp.Expr, y: exp.Expr) -> PredicateFormula:
+        known = ~self.null(x) & ~self.null(y)  # strict operator
         holds = self.notebook.compare(op, x, y)
         return known & holds, known & ~holds
 
-    def _row_compare(
-        self, op: type[Comparison], left: Sequence[exp.Expr], right: Sequence[exp.Expr]
+    #  9.25.6 -> composite type op composite type (need another fn, and data introspection)
+    #     he default behavior of the above operators is
+    # the same as for IS [ NOT ] DISTINCT FROM for row constructors (see Section 9.25.5).
+    # row_constructor IS NOT DISTINCT FROM row_constructor
+    # This construct is similar to a = row comparison, but it does not yield null for null inputs. Instead, any
+    # null value is considered unequal to (distinct from) any non-null value, and any two nulls are considered
+    # equal (not distinct). Thus the result will always be either true or false, never null.
+    def _composite_compare(
+        self, op: type[Comparison], left: dict[str, NullFormula], right: dict[str, NullFormula]
     ) -> PredicateFormula:
+        if op == exp.EQ or op == exp.NEQ:
+            pass
+
         return self._fresh_pred()  # TODO
 
+    def _row_compare(
+        self,
+        op: type[Comparison],
+        left: Sequence[exp.Expr],
+        right: Sequence[exp.Expr] | Subquery,
+    ) -> PredicateFormula:
+
+        ctx = self.ctx
+
+        if isinstance(right, Subquery):
+            # row op (subquery)
+            empty = right.empty
+            fresh_pred = self._fresh_pred()
+            return ~empty & fresh_pred[0], ~empty & fresh_pred[1]
+        else:
+            # row op row
+            pairs = list(zip(left, right, strict=True))
+
+            match op:
+                case exp.EQ:
+                    preds = [self._compare(op, l, r) for l, r in pairs]
+                    return ctx.all(t for t, _ in preds), ctx.any(f for _, f in preds)
+                case exp.NEQ:
+                    preds = [self._compare(op, l, r) for l, r in pairs]
+                    return ctx.any(f for _, f in preds), ctx.all(t for t, _ in preds)
+                case _:
+                    # TODO
+                    raise ValueError()
+
+    # READ 9.24, 9.25.3/4 support array syntax  -> expression ALL Array[...]
+    # subquery and array form (right hand side)
+    # value or row constructor (left hand side), value can be a composite type
+    # 4 combinaisons
     def _quantified(
         self, op: type[exp.Expr], left: exp.Expr, quantifier: Literal["any", "all"], inner: exp.Expr
     ) -> PredicateFormula:
         return self._fresh_pred()  # TODO
 
+    # read 9.24.2/3, 9.25.1 9.25.2 -> subquery and (expression [,expression, ...]) form (right hand side)
+    # value or row comparison (left hand side)
+    # behave differently for comparison (9.25.5/6), in is = ANY (so be aware of row op row , composite value op composite value)
+    def _in(self, expr: exp.Expr):
+        return self._fresh_pred()  # TODO
+
+    # re-check but i think only row as a special behavior, (other composite type are compared as is the value NULL)
+    # 9.2
     def _is(self, expr: exp.Is) -> PredicateFormula:
         left, right, negate = expr.this, expr.expression, bool(expr.args.get("negate"))
         match right:
@@ -305,6 +357,7 @@ class Evaluator:
                 return (~hit, hit) if negate else (hit, ~hit)
         return self._fresh_pred()
 
+    # composite type use the same rule as row (add this) 9.25.5/6, and it is composite = (<>) composite
     def _not_distinct(self, left: exp.Expr, right: exp.Expr):
         if is_row(left) and is_row(right):
             lr, rr = left.expressions, right.expressions
@@ -316,9 +369,6 @@ class Evaluator:
     def _same(self, left: exp.Expr, right: exp.Expr) -> Formula:
         nl, nr = self.null(left), self.null(right)
         return (nl & nr) | (~nl & ~nr & self.notebook.compare(exp.EQ, left, right))
-
-    def _in(self, expr: exp.Expr):
-        return self._fresh_pred()  # TODO
 
     def _between(self, e: exp.Between) -> PredicateFormula:
         x, low, high = e.this, e.args["low"], e.args["high"]

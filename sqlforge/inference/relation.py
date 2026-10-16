@@ -11,6 +11,10 @@ type Column = str
 type Key = tuple[Alias, Column]  # alias.column
 
 
+def support(fs: Sequence[Formula]):
+    return set().union(*(f.support for f in fs))
+
+
 @dataclass(frozen=True, slots=True)
 class Relation:
     """Result of a scope or a cte/table materialization"""
@@ -24,13 +28,25 @@ class Relation:
     def is_empty(self) -> bool:
         return not self.ctx.sat(self.invariant)
 
+    @property
+    def formulas(self):
+        """
+        [*nulls, invariant]
+        """
+        return [*self.nulls, self.invariant]  # dont forget card when u add feature
+
+    @property
+    def support(self):
+        return support(self.formulas)
+
     def result(self):
         sat, inv = self.ctx.sat, self.invariant
         return [Nullability(sat(inv & f), sat(inv & ~f)) for f in self.nulls]
 
     def compress(self):
-        visible = set().union(*(f.support for f in self.nulls))
-        hidden = {v for v in (self.invariant.support - visible) if not self.ctx.is_global(v)}
+        hidden = {
+            v for v in (self.invariant.support - support(self.nulls)) if not self.ctx.is_global(v)
+        }
         return (
             replace(self, invariant=self.ctx.bdd.exist(hidden, self.invariant)) if hidden else self
         )
@@ -60,11 +76,10 @@ class Template:
     def materialize(self):
         rel = self._relation
         ctx = rel.ctx
-        support = set(rel.invariant.support).union(*(f.support for f in rel.nulls))
 
         fresh = {
             v: ctx.fresh(ctx.kind(v))
-            for v in sorted(support, key=ctx.bdd.level_of_var)
+            for v in sorted(rel.support, key=ctx.bdd.level_of_var)
             if not ctx.is_global(v)
         }
 
@@ -104,3 +119,7 @@ class Subquery:
         #     head = e.expressions[0].unalias()
         #     return ctx.false if isinstance(head, exp.Count) else ctx.fresh(Kind.MAYBE)
         return self.empty | self.relation.nulls[0]
+
+    @property
+    def nulls(self):
+        return self.relation.nulls

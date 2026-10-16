@@ -4,7 +4,10 @@ from functools import cached_property, reduce
 from typing import cast, overload
 
 from sqlglot import exp
+from sqlglot.errors import SqlglotError
 from sqlglot.optimizer import Scope
+
+from sqlforge.introspection.catalog import Table, View
 
 from . import transfert as t
 from .catalog import Catalog
@@ -12,6 +15,7 @@ from .context import Context, Formula, Kind
 from .eval import Env, Notebook
 from .exception import Unsupported
 from .expressions import is_join_group, is_plain_aggregate
+from .prepare import prepare_view
 from .relation import Relation, Row, Subquery, Template
 
 
@@ -184,30 +188,62 @@ class Analyzer:
         self.ctx = ctx
         self.catalog = catalog
         self._cte_cache: dict[Scope, Template] = {}
-        self._catalog_cache: dict[str, Template] = {}
+        self._scan_cache: dict[tuple[str | None, str], Template] = {}
 
     def run(self, scope: Scope):
         return ScopedAnalyzer(self, scope, None).analyse()
 
     def scan(self, tab: exp.Table) -> Row:
-        template = self._catalog_cache.get(tab.name)
+        key = (tab.db or None, tab.name)
+        template = self._scan_cache.get(key)
 
-        if template is None:
-            table = self.catalog.tables[tab.name]
-            relation = Relation(
+        if template is not None:
+            return template.materialize().row(tab.alias)
+
+        source = self.catalog.source(key)
+        match source:
+            case Table() as table:
+                relation = self._table_relation(table)
+
+            case View() as view:
+                relation = self._view_relation(view)
+
+            case None:
+                raise Unsupported(f"Unknown source {key}")
+
+        self._scan_cache[key] = Template(relation)
+        return relation.row(tab.alias)
+
+    def _table_relation(self, source: Table) -> Relation:
+        return Relation(
+            ctx=self.ctx,
+            columns=tuple(source.columns.keys()),
+            nulls=[
+                self.ctx.fresh(Kind.BASE) if source.maybe_null(col.name) else self.ctx.false
+                for col in source.columns.values()
+            ],
+            invariant=self.ctx.true,
+        )
+        # compression is not needed
+
+    def _view_relation(self, view: View) -> Relation:
+        # TODO: add a 2 view test round-trip since i reuse relation the first time
+        key = (view.ns, view.name)
+        relation = self.catalog.views.import_(self.ctx, key)
+        if relation is not None:
+            return Template(relation).materialize()
+
+        try:
+            relation = self.run(prepare_view(view, self.catalog.mapping_schema))
+        except (SqlglotError, Unsupported):
+            relation = Relation(  # view we can't analyze: every column may be NULL
                 ctx=self.ctx,
-                columns=tuple(table.columns.keys()),
-                nulls=[
-                    self.ctx.fresh(Kind.BASE) if col.nullable else self.ctx.false
-                    for col in table.columns.values()
-                ],
+                columns=tuple(view.columns),
+                nulls=[self.ctx.fresh(Kind.MAYBE) for _ in view.columns],
                 invariant=self.ctx.true,
-            )  # compression is not needed
-            template = Template(relation)
-            self._catalog_cache[tab.name] = template
-            return relation.row(tab.alias)
-
-        return template.materialize().row(tab.alias)
+            )
+        self.catalog.views.export(self.ctx, key, relation)
+        return relation
 
     def cte(self, cte_scope: Scope, alias: str) -> Row:
         template = self._cte_cache.get(cte_scope)
@@ -218,3 +254,11 @@ class Analyzer:
             return relation.row(alias)
 
         return template.materialize().row(alias)
+
+
+# Star expansion rules
+# The composite_value.* syntax results in column expansion of this kind when it appears at
+# the top level of a SELECT output list, a RETURNING list in INSERT/UPDATE/DELETE/MERGE,
+# a VALUES clause, or a row constructor. In all other contexts (including when nested inside one of
+# those constructs), attaching .* to a composite value does not change the value, since it means “all
+# columns” and so the same composite value is produced again.

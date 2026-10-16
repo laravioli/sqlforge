@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -8,12 +10,14 @@ else:
     except ImportError:
         import dd.autoref as _bdd
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from enum import Enum
 from string import digits
 
 type Formula = _bdd.Function
 type VarName = str
+
+from contextlib import contextmanager
 
 
 class Kind(Enum):
@@ -53,7 +57,7 @@ class Context:
 
     @staticmethod
     def kind(name: VarName) -> Kind:
-        return _KIND_OF[name.rstrip(digits)]
+        return _KIND_OF[name.lstrip("_").rstrip(digits)]
 
     def fresh(self, kind: Kind) -> Formula:
         var = f"{kind.value}{self._counter}"
@@ -66,6 +70,9 @@ class Context:
 
     def sat(self, f: Formula):
         return f != self.false
+
+    def ite(self, g: Formula, u: Formula, v: Formula):
+        return self.bdd.ite(g, u, v)
 
     def all(self, fs: Iterable[Formula]) -> Formula:
         out = self.true
@@ -93,3 +100,25 @@ class Context:
     @property
     def params(self):
         return {k: self.var(v) for k, v in self._params.items()}
+
+    def declare(self, names: Iterable[str]) -> None:
+        bdd = self.bdd
+        missing = [n for n in names if n not in bdd.vars]
+        if missing:
+            bdd.declare(*missing)
+
+    def copy(self, fs: Sequence[Formula], dest: Context):
+        """
+        copy fs formulas into dest ctx bdd
+        """
+        with dest.reordering_off() as dest_bdd:
+            cp = [self.bdd.copy(f, dest_bdd) for f in fs]
+        return cp
+
+    @contextmanager
+    def reordering_off(self):
+        try:
+            self.bdd.configure(reordering=False)
+            yield self.bdd
+        finally:
+            self.bdd.configure(reordering=True)

@@ -14,6 +14,8 @@ class TypeRecord(TypedDict):
     ns: str
     name: str
     kind: bytes
+    comp_kind: bytes | None
+    query: str | None
     basetype: int | None
     basetype_name: str | None
     elemtype: int
@@ -43,6 +45,19 @@ class TypeKind(StrEnum):
     MULTI_RANGE = "m"
 
 
+class CompositeKind(StrEnum):
+    TABLE = "r"
+    INDEX = "i"
+    SEQUENCE = "S"
+    TOAST = "t"
+    VIEW = "v"
+    MATERIALIZED_VIEW = "m"
+    TYPE = "c"
+    FOREIGN_TABLE = "f"
+    PARTITIONED_TABLE = "p"
+    PARTITIONED_INDEX = "I"
+
+
 class PGAttribute(Struct):
     attr_type: Oid
     name: str
@@ -66,6 +81,7 @@ class PGType(Struct):
 
     @classmethod
     def convert(cls, rec: TypeRecord, **kwargs):
+        # smart constructor
         return convert(dict(rec) | kwargs, cls)
 
 
@@ -82,10 +98,16 @@ class RangeType(PGType):
 
 
 class CompositeType(PGType):
+    comp_kind: CompositeKind
     attributes: list[PGAttribute]
 
 
+class ViewType(CompositeType):
+    query: str
+
+
 class DomainType(PGType):
+    # TODO: add pg_type.typnotnull
     basetype: Oid  # reference to the underlying type
 
 

@@ -21,6 +21,12 @@ _TYPEINFO: typing.Final = """\
             ns.nspname                      AS ns,
             t.typname                       AS name,
             t.typtype                       AS kind,
+            c.relkind                       AS comp_kind,
+
+            (CASE WHEN c.relkind IN ('v', 'm')
+                THEN pg_get_viewdef(c.oid)
+            END)                            AS query,
+
             (CASE WHEN t.typtype = 'd' THEN
                 (WITH RECURSIVE typebases(oid, depth) AS (
                     SELECT
@@ -46,50 +52,34 @@ _TYPEINFO: typing.Final = """\
 
                ELSE NULL
             END)                            AS basetype,
+
             t.typelem                       AS elemtype,
             t.typcategory::text             AS category,
             COALESCE(
                 range_t.rngsubtype,
                 multirange_t.rngsubtype)    AS range_subtype,
-            (CASE WHEN t.typtype = 'c' THEN
-                (SELECT
-                    array_agg(ia.atttypid ORDER BY ia.attnum)
-                FROM
-                    pg_attribute ia
-                    INNER JOIN pg_class c
-                        ON (ia.attrelid = c.oid)
-                WHERE
-                    ia.attnum > 0 AND NOT ia.attisdropped
-                    AND c.reltype = t.oid)
-
-                ELSE NULL
-            END)                            AS attrtypoids,
-            (CASE
-                WHEN t.typtype = 'c' THEN
-                    (
-                        SELECT jsonb_agg(
-                            jsonb_build_object(
-                                'attr_type',   ia.atttypid::int,
-                                'name',        ia.attname,
-                                'position',    ia.attnum,
-                                'nullable',    NOT ia.attnotnull
-                            )
-                            ORDER BY ia.attnum
-                        )
-                        FROM pg_attribute ia
-                        INNER JOIN pg_class c
-                            ON ia.attrelid = c.oid
-                        WHERE
-                            c.reltype = t.oid
-                            AND ia.attnum > 0
-                            AND NOT ia.attisdropped
-                    )
-                ELSE NULL
-            END)                            AS attributes
+            attrs.attrtypoids               AS attrtypoids,
+            attrs.attributes                AS attributes
         FROM
             pg_catalog.pg_type AS t
             INNER JOIN pg_catalog.pg_namespace ns ON (
                 ns.oid = t.typnamespace)
+            LEFT JOIN pg_class c
+                ON t.typtype = 'c' AND c.reltype = t.oid
+            LEFT JOIN LATERAL (
+                SELECT
+                    array_agg(a.atttypid ORDER BY a.attnum)     AS attrtypoids,
+                    jsonb_agg(jsonb_build_object(
+                        'attr_type', a.atttypid::int,
+                        'name',      a.attname,
+                        'position',  a.attnum,
+                        'nullable',  NOT a.attnotnull
+                    ) ORDER BY a.attnum)                       AS attributes
+                FROM pg_attribute a
+                WHERE a.attrelid = c.oid
+                  AND a.attnum > 0
+                  AND NOT a.attisdropped
+            ) attrs ON true
             LEFT JOIN pg_range range_t ON (
                 t.oid = range_t.rngtypid
             )
@@ -101,12 +91,12 @@ _TYPEINFO: typing.Final = """\
 
 LOOKUP_TYPES: typing.Final = f"""\
 WITH RECURSIVE typeinfo_tree(
-    oid, ns, name, kind, basetype, elemtype, category,
-    range_subtype, attrtypoids, attributes, depth)
+    oid, ns, name, kind, comp_kind, query, basetype, elemtype, 
+    category, range_subtype, attrtypoids, attributes, depth)
 AS (
     SELECT
-        ti.oid, ti.ns, ti.name, ti.kind, ti.basetype,
-        ti.elemtype, ti.category, ti.range_subtype,
+        ti.oid, ti.ns, ti.name, ti.kind, ti.comp_kind, ti.query,
+        ti.basetype, ti.elemtype, ti.category, ti.range_subtype,
         ti.attrtypoids, ti.attributes, 0
     FROM
         {_TYPEINFO} AS ti
@@ -116,8 +106,8 @@ AS (
     UNION ALL
 
     SELECT
-        ti.oid, ti.ns, ti.name, ti.kind, ti.basetype,
-        ti.elemtype, ti.category, ti.range_subtype,
+        ti.oid, ti.ns, ti.name, ti.kind, ti.comp_kind, ti.query,
+        ti.basetype, ti.elemtype, ti.category, ti.range_subtype,
         ti.attrtypoids, ti.attributes, tt.depth + 1
     FROM
         {_TYPEINFO} ti,

@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cached_property
 
-from sqlglot import exp
 from sqlglot.errors import SqlglotError
-from sqlglot.optimizer import Scope, build_scope
-from sqlglot.optimizer.annotate_types import annotate_types
-from sqlglot.optimizer.qualify import qualify
-from sqlglot.optimizer.simplify import simplify
-from sqlglot.schema import MappingSchema
 
 from sqlforge.core.structures import SQL, AttrName, ParamName, PythonType, TypedSQL
 from sqlforge.introspection import PGTypeRegister
@@ -20,52 +13,48 @@ from .context import Context
 from .exception import ByPassed, Unsupported
 from .infer import Analyzer
 from .lattice import MAYBE_NULL, Nullability
+from .prepare import prepare_sql
 
 
-def not_query(ast: exp.Expr) -> bool:
-    return not isinstance(ast, exp.Query)
+class Engine:
+    def __init__(self, catalog: Catalog, statements: list[TypedSQL]):
+        self.catalog = catalog
+        self.statements = statements
 
+    @staticmethod
+    def from_register(type_register: PGTypeRegister, statements: list[TypedSQL]):
+        return Engine(catalog=Catalog(type_register), statements=statements)
 
-def contain_dml(ast: exp.Expr) -> bool:
-    return bool(ast.find(exp.Insert, exp.Update, exp.Delete, exp.Merge))
+    def analyze(self) -> list[AnalyzedSQL]:
+        return [
+            AnalyzedSQL(stmt.source, stmt.typed_params, self.analyze_one(stmt))
+            for stmt in self.statements
+        ]
 
+    def analyze_one(self, statement: TypedSQL) -> Analysis:
+        attrs = list(statement.typed_attrs.items())
+        if not attrs:
+            return Analysis(columns=(), bypassed=False)
 
-def has_grouping_sets(ast: exp.Expr) -> bool:
-    return bool(ast.find(exp.Rollup, exp.Cube, exp.GroupingSets))
+        try:
+            error = None
+            scope = prepare_sql(statement.source, self.catalog.mapping_schema)
+            bypassed = False
 
+            nulls = Analyzer(Context(), self.catalog).run(scope).result()
+            if len(attrs) != len(nulls):
+                raise Unsupported(f"{len(nulls)} columns inferred, {len(attrs)} expected")
 
-BYPASS: list[Callable[[exp.Expr], bool]] = [
-    not_query,
-    contain_dml,
-    has_grouping_sets,
-]
+        except (SqlglotError, Unsupported) as e:
+            nulls, bypassed, error = [MAYBE_NULL] * len(attrs), isinstance(e, ByPassed), str(e)
 
-
-def bypass(ast: exp.Expr):
-    return any(fn(ast) for fn in BYPASS)
-
-
-def prepare_sql(sql: SQL, schema: MappingSchema) -> Scope:
-    ast = sql.expr.copy().unnest()
-    scope = None
-
-    if bypass(ast):
-        raise ByPassed("The analyzer does not support this statement yet")
-
-    ast = simplify(
-        annotate_types(
-            qualify(ast, schema=schema, dialect="postgres"),
-            schema=schema,
-            dialect="postgres",
-        ),
-        dialect="postgres",
-    )
-    scope = build_scope(ast)
-
-    if scope is None:
-        raise Unsupported(f"{sql.name} could not create a sqlglot scope")
-
-    return scope
+        return Analysis(
+            columns=tuple(
+                ColumnResult(name, type_, null) for (name, type_), null in zip(attrs, nulls)
+            ),
+            bypassed=bypassed,
+            error=error,
+        )
 
 
 @dataclass(frozen=True)
@@ -99,44 +88,3 @@ class AnalyzedSQL:
     @cached_property
     def typed_attrs(self) -> dict[AttrName, PythonType]:
         return {c.name: c.python for c in self.analysis.columns}
-
-
-class Engine:
-    def __init__(self, catalog: Catalog, statements: list[TypedSQL]):
-        self.catalog = catalog
-        self.statements = statements
-
-    @staticmethod
-    def from_register(type_register: PGTypeRegister, statements: list[TypedSQL]):
-        return Engine(catalog=Catalog(type_register), statements=statements)
-
-    def analyze(self):
-        return [
-            AnalyzedSQL(stmt.source, stmt.typed_params, self.analyze_one(stmt))
-            for stmt in self.statements
-        ]
-
-    def analyze_one(self, statement: TypedSQL) -> Analysis:
-        attrs = list(statement.typed_attrs.items())
-        if not attrs:
-            return Analysis(columns=(), bypassed=False)
-
-        try:
-            error = None
-            scope = prepare_sql(statement.source, self.catalog.mapping_schema)
-            bypassed = False
-
-            nulls = Analyzer(Context(), self.catalog).run(scope).result()
-            if len(attrs) != len(nulls):
-                raise Unsupported(f"{len(nulls)} columns inferred, {len(attrs)} expected")
-
-        except (SqlglotError, Unsupported) as e:
-            nulls, bypassed, error = [MAYBE_NULL] * len(attrs), isinstance(e, ByPassed), str(e)
-
-        return Analysis(
-            columns=tuple(
-                ColumnResult(name, type_, null) for (name, type_), null in zip(attrs, nulls)
-            ),
-            bypassed=bypassed,
-            error=error,
-        )

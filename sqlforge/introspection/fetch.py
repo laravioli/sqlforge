@@ -18,6 +18,7 @@ from .structures import (
     RangeType,
     TypeKind,
     TypeRecord,
+    ViewType,
 )
 
 ATTR_DECODER = Decoder(type=list[PGAttribute])
@@ -56,13 +57,25 @@ class PgFetcher:
                     register[rec["oid"]] = cls.convert(rec, kind=kind)
 
                 case TypeKind.COMPOSITE:
-                    assert rec["attributes"] is not None
+                    assert rec["attributes"] is not None and rec["comp_kind"] is not None
                     attributes = ATTR_DECODER.decode(rec["attributes"])
-                    register[rec["oid"]] = CompositeType.convert(
-                        rec,
-                        kind=kind,
-                        attributes=attributes,
-                    )
+                    comp_kind = rec["comp_kind"].decode()
+
+                    if comp_kind in ["v", "m"]:
+                        register[rec["oid"]] = ViewType.convert(
+                            rec,
+                            kind=kind,
+                            comp_kind=comp_kind,
+                            query=rec["query"],
+                            attributes=attributes,
+                        )
+                    else:
+                        register[rec["oid"]] = CompositeType.convert(
+                            rec,
+                            kind=kind,
+                            comp_kind=comp_kind,
+                            attributes=attributes,
+                        )
 
                 case TypeKind.DOMAIN:
                     register[rec["oid"]] = DomainType.convert(
