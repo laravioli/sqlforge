@@ -85,6 +85,7 @@ class Notebook:
         reusable = self._reusables.get(expr)
         if reusable is None:
             reusable = not (bool(expr.find(exp.Query)) or self._volatile(expr))
+            self._reusables[expr] = reusable
         return reusable
 
     def _volatile(self, expr: exp.Expr):

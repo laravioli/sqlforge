@@ -148,4 +148,6 @@ def quantifier(e: exp.Expr) -> tuple[Literal["any", "all"], exp.Expr] | None:
             return "all", inner.unnest()
         case exp.Anonymous() if e.name.upper() == "ALL" and len(e.expressions) == 1:
             return "all", (e.expressions[0]).unnest()
+        case exp.Anonymous() if e.name.upper() == "SOME" and len(e.expressions) == 1:  # SOME is ANY
+            return "any", (e.expressions[0]).unnest()
     return None

@@ -27,7 +27,7 @@ ATTR_DECODER = Decoder(type=list[PGAttribute])
 class PgFetcher:
     def __init__(self, conn: Connection):
         self._conn = conn
-        self._udf_oids: asyncio.Task[Sequence[Oid]] | None = None
+        self._udf_oids: asyncio.Task[Sequence[Oid] | None] | None = None
 
     async def fetch_types(self, oids: Sequence[int] = ()):
         records = cast(list[TypeRecord], await self._conn.fetch(LOOKUP_TYPES, oids))
@@ -37,10 +37,10 @@ class PgFetcher:
     async def fetch_fn(self):
         pass
 
-    async def get_user_oids(self):
+    async def get_user_oids(self) -> Sequence[Oid]:
         if self._udf_oids is None:
             self._udf_oids = asyncio.create_task(self._conn.fetchval(USER_TYPE_OIDS))
-        return await self._udf_oids
+        return await self._udf_oids or ()
 
     def _convert_type_records(
         self, recs: list[TypeRecord], enums: dict[Oid, list[str]]
@@ -58,7 +58,7 @@ class PgFetcher:
 
                 case TypeKind.COMPOSITE:
                     assert rec["attributes"] is not None and rec["comp_kind"] is not None
-                    attributes = ATTR_DECODER.decode(rec["attributes"])
+                    attributes = ATTR_DECODER.decode(rec["attributes"]) if rec["attributes"] else []
                     comp_kind = rec["comp_kind"].decode()
 
                     if comp_kind in ["v", "m"]:

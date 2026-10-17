@@ -83,8 +83,21 @@ def mapping_schema(
     register: PGTypeRegister, search_path: Sequence[str] = DEFAULT_SEARCH_PATH
 ) -> SearchPathSchema:
 
+    def sqlglot_type(oid: Oid, register: PGTypeRegister) -> DataType:
+        match register[oid]:
+            case DomainType(basetype=base):
+                return sqlglot_type(base, register)
+            case ArrayType(elemtype=elem):
+                return DataType(
+                    this=DataType.Type.ARRAY,
+                    expressions=[sqlglot_type(elem, register)],
+                    nested=True,
+                )
+            case t:
+                return DataType.build(t.name, dialect="postgres", udt=True)
+
     def column(attr: Column) -> DataType:
-        dt = _sqlglot_type(attr.attr_type, register)
+        dt = sqlglot_type(attr.attr_type, register)
         dt.set("nullable", attr.nullable)
         return dt
 
@@ -92,15 +105,3 @@ def mapping_schema(
     for rel in sources(register):
         mapping.setdefault(rel.ns, {})[rel.name] = {k: column(v) for k, v in rel.columns.items()}
     return SearchPathSchema(mapping, search_path)
-
-
-def _sqlglot_type(oid: Oid, register: PGTypeRegister) -> DataType:
-    match register[oid]:
-        case DomainType(basetype=base):
-            return _sqlglot_type(base, register)
-        case ArrayType(elemtype=elem):
-            return DataType(
-                this=DataType.Type.ARRAY, expressions=[_sqlglot_type(elem, register)], nested=True
-            )
-        case t:
-            return DataType.build(t.name, dialect="postgres", udt=True)

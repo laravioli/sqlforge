@@ -13,6 +13,7 @@ from sqlforge.core.structures import SQL
 from sqlforge.introspection.catalog import View
 
 from .exception import ByPassed, Unsupported
+from .expressions import COMPARISON_PREDICATES
 
 
 def not_query(ast: exp.Expr) -> bool:
@@ -23,14 +24,31 @@ def contain_dml(ast: exp.Expr) -> bool:
     return bool(ast.find(exp.Insert, exp.Update, exp.Delete, exp.Merge))
 
 
+def is_recursive(ast: exp.Expr) -> bool:
+    """WITH RECURSIVE isn't analyzed yet"""
+    return any(w.args.get("recursive") for w in ast.find_all(exp.With))
+
+
 def has_grouping_sets(ast: exp.Expr) -> bool:
     return bool(ast.find(exp.Rollup, exp.Cube, exp.GroupingSets))
+
+
+def is_after_comparison(ast: exp.Expr) -> bool:
+    # https://github.com/tobymao/sqlglot/issues/8661
+    """`a = b IS NULL` is `(a = b) IS NULL` in Postgres, but sqlglot parses `a = (b IS NULL)`"""
+    for cmp in ast.find_all(*COMPARISON_PREDICATES):
+        right = cmp.expression.this if isinstance(cmp.expression, exp.Not) else cmp.expression
+        if isinstance(right, (exp.Is, exp.NullSafeEQ, exp.NullSafeNEQ)):
+            return True
+    return False
 
 
 BYPASS: list[Callable[[exp.Expr], bool]] = [
     not_query,
     contain_dml,
+    is_recursive,
     has_grouping_sets,
+    is_after_comparison,
 ]
 
 

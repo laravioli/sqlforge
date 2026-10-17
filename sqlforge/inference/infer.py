@@ -7,16 +7,14 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 from sqlglot.optimizer import Scope
 
-from sqlforge.introspection.catalog import Table, View
-
 from . import transfert as t
-from .catalog import Catalog
+from .catalog import Catalog, Oid, Shape, Table, View
 from .context import Context, Formula, Kind
 from .eval import Env, Notebook
 from .exception import Unsupported
 from .expressions import is_join_group, is_plain_aggregate
 from .prepare import prepare_view
-from .relation import Relation, Row, Subquery, Template
+from .relation import ColKey, Relation, Row, Subquery, Template
 
 
 class ScopedAnalyzer:
@@ -27,6 +25,7 @@ class ScopedAnalyzer:
         self.ctx = analyzer.ctx
         self.side: list[Formula] = []
         self.notebook: Notebook = Notebook(self.ctx, None)
+        self.row_types: dict[ColKey, Oid] = {}
 
     def analyse(self):
         scope = self.scope
@@ -167,7 +166,8 @@ class ScopedAnalyzer:
                 if isinstance(src, Scope):
                     return self.analyzer.cte(src, alias)
                 else:
-                    return self.analyzer.scan(src)
+                    self._add_source_types((node.db or None, node.name), alias)
+                    return self.analyzer.scan(src, alias)
 
             case exp.Subquery():
                 return self.child(src, self.outer).row(alias)  # type: ignore
@@ -177,6 +177,14 @@ class ScopedAnalyzer:
 
             case _:
                 raise Unsupported(f"source {type(node).__name__}")
+
+    def _add_source_types(self, key: tuple[str | None, str], alias: str):
+        src = self.analyzer.catalog.source(key)
+        if src is not None:
+            self.row_types.update({(alias, k): v.attr_type for k, v in src.columns.items()})
+
+    def shape(self, oid: Oid) -> Shape:
+        return self.analyzer.catalog.shape(oid)
 
 
 class Analyzer:
@@ -193,12 +201,12 @@ class Analyzer:
     def run(self, scope: Scope):
         return ScopedAnalyzer(self, scope, None).analyse()
 
-    def scan(self, tab: exp.Table) -> Row:
+    def scan(self, tab: exp.Table, alias: str) -> Row:
         key = (tab.db or None, tab.name)
         template = self._scan_cache.get(key)
 
         if template is not None:
-            return template.materialize().row(tab.alias)
+            return template.materialize().row(alias)
 
         source = self.catalog.source(key)
         match source:
@@ -212,7 +220,7 @@ class Analyzer:
                 raise Unsupported(f"Unknown source {key}")
 
         self._scan_cache[key] = Template(relation)
-        return relation.row(tab.alias)
+        return relation.row(alias)
 
     def _table_relation(self, source: Table) -> Relation:
         return Relation(
@@ -227,11 +235,17 @@ class Analyzer:
         # compression is not needed
 
     def _view_relation(self, view: View) -> Relation:
-        # TODO: add a 2 view test round-trip since i reuse relation the first time
         key = (view.ns, view.name)
-        relation = self.catalog.views.import_(self.ctx, key)
-        if relation is not None:
-            return Template(relation).materialize()
+        stored_view = self.catalog.views.import_(self.ctx, key)
+        if stored_view is not None:
+            return Template(
+                Relation(
+                    ctx=self.ctx,
+                    columns=tuple(view.columns),
+                    nulls=stored_view.nulls,
+                    invariant=stored_view.invariant,
+                )
+            ).materialize()
 
         try:
             relation = self.run(prepare_view(view, self.catalog.mapping_schema))

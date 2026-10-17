@@ -8,7 +8,7 @@ from .lattice import Nullability
 
 type Alias = str
 type Column = str
-type Key = tuple[Alias, Column]  # alias.column
+type ColKey = tuple[Alias, Column]  # alias.column
 
 
 def support(fs: Sequence[Formula]):
@@ -17,7 +17,7 @@ def support(fs: Sequence[Formula]):
 
 @dataclass(frozen=True, slots=True)
 class Relation:
-    """Result of a scope or a cte/table materialization"""
+    """Result of a scope or a cte/table/view materialization"""
 
     ctx: Context
     columns: Sequence[str]
@@ -98,7 +98,7 @@ class Template:
 class Row:
     """The row being transformed inside one scope"""
 
-    nulls: Mapping[Key, Formula]
+    nulls: Mapping[ColKey, Formula]
     invariant: Formula
 
     @staticmethod
@@ -130,7 +130,7 @@ class ViewStore:
         self._ctx = Context()
         self._store: dict[tuple[str, str], StoredView] = {}
 
-    def import_(self, dest: Context, key: tuple[str, str]) -> Relation | None:
+    def import_(self, dest: Context, key: tuple[str, str]) -> StoredView | None:
         """
         viewstore -> currrent analysis
         """
@@ -142,7 +142,7 @@ class ViewStore:
         dest.declare(sorted(view.support, key=src.bdd.level_of_var))
         fs = src.copy(view.formulas, dest)
 
-        return Relation(ctx=dest, columns=view.columns, nulls=fs[:-1], invariant=fs[-1])
+        return StoredView(nulls=fs[:-1], invariant=fs[-1])
 
     def export(self, src: Context, key: tuple[str, str], rel: Relation):
         """
@@ -157,12 +157,11 @@ class ViewStore:
         fs = [src.bdd.let(rename, f) for f in rel.formulas] if rename else rel.formulas
         fs = src.copy(fs, dest)
 
-        self._store[key] = StoredView(columns=rel.columns, nulls=fs[:-1], invariant=fs[-1])
+        self._store[key] = StoredView(nulls=fs[:-1], invariant=fs[-1])
 
 
 @dataclass
 class StoredView:
-    columns: Sequence[str]
     nulls: Sequence[Formula]
     invariant: Formula
 

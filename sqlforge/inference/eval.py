@@ -6,6 +6,7 @@ from typing import Literal, Protocol
 
 from sqlglot import exp
 
+from .catalog import Composite, Oid, Shape
 from .context import Context, Formula, Kind
 from .exception import StarNotExpanded, UnknownColumn
 from .expressions import (
@@ -18,7 +19,7 @@ from .expressions import (
     quantifier,
 )
 from .notebook import Notebook
-from .relation import Key, Row, Subquery
+from .relation import ColKey, Row, Subquery
 
 type PredicateFormula = tuple[Formula, Formula]
 type NullFormula = Formula
@@ -28,8 +29,10 @@ class ScopeProtocol(Protocol):
     ctx: Context
     side: list[Formula]
     notebook: Notebook
+    row_types: dict[ColKey, Oid]
 
     def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery: ...
+    def shape(self, oid: Oid) -> Shape: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +42,7 @@ class Env:
     """
 
     scope: ScopeProtocol
-    nulls: Mapping[Key, Formula]
+    nulls: Mapping[ColKey, Formula]
     outer: Env | None
 
     def evaluator(self):
@@ -57,7 +60,7 @@ class Env:
             nulls={k: n for row in (self, *rows) for k, n in row.nulls.items()},
         )
 
-    def null(self, key: Key) -> Formula:
+    def null(self, key: ColKey) -> Formula:
         env: Env | None = self
         while env is not None:
             if (formula := env.nulls.get(key)) is not None:
@@ -66,6 +69,10 @@ class Env:
         raise UnknownColumn(key)
 
     def fields(self, alias: str) -> list[Formula]:
+        """
+        Returns:
+               all formulas from one aliased table in a row
+        """
         env: Env | None = self
         while env is not None:
             found = [f for (a, _), f in env.nulls.items() if a == alias]
@@ -73,6 +80,18 @@ class Env:
                 return found
             env = env.outer
         raise UnknownColumn((alias, "*"))
+
+    def oid(self, col_key: ColKey) -> Oid | Literal["unknown"]:
+        """
+        Returns:
+                oid from one row column or unknown (cte, derived table)
+        """
+        env: Env | None = self
+        while env is not None:
+            if col_key in env.nulls:
+                return env.scope.row_types.get(col_key, "unknown")
+            env = env.outer
+        return "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +120,18 @@ class Evaluator:
 
             case exp.TableColumn():
                 return self.notebook.null("row", e) & ctx.all(self.env.fields(e.name))
+
+            # NOTE: function will also use Dot
+            case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
+                return self.env.null((row.name, field.name))
+
+            case exp.Dot(this=base):  # (composite).f
+                match self._shape(base):
+                    case "scalar":
+                        all_set = all_null = ctx.false
+                    case shape:
+                        all_set, all_null = self._may_composite(base, shape)
+                return self.null(base) | (~all_set & (all_null | self.notebook.null("field", e)))
 
             case exp.Parameter(this=this):
                 return ctx.param(this.to_py())  # type: ignore
@@ -249,7 +280,46 @@ class Evaluator:
         holds = self.notebook.holds("value", e)
         return known & holds, known & ~holds
 
-    # implement other comparison , add composite introspection
+    def _type(self, e: exp.Expr) -> Oid | Literal["unknown"]:
+        """
+        catalog type of a column or of a field at the end of a path
+                Returns:
+                    pg_type oid or unknown (cte, derived table))
+        """
+        match e:
+            case exp.Paren(this=this):
+                return self._type(this)
+
+            case exp.Column(table=table, name=name):
+                return self.env.oid((table, name))
+            case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
+                return self.env.oid((row.name, field.name))
+
+            case exp.Dot(this=base, expression=field):
+                match self._shape(base):
+                    case Composite(fields=fields):
+                        return dict(fields).get(field.name, "unknown")
+
+        return "unknown"
+
+    def _shape(self, e: exp.Expr) -> Shape:
+        oid = self._type(e)
+        return "unknown" if oid == "unknown" else self.env.scope.shape(oid)
+
+    def _may_composite(self, e: exp.Expr, shape: Composite | Literal["unknown"]):
+        match shape:
+            case Composite(fields=()):  # no field: both tests hold
+                all_set = all_null = self.ctx.true
+            case Composite() | "unknown":  # with fields: not both
+                all_set, all_null = (
+                    self.notebook.holds("all set", e),
+                    self.notebook.holds("all null", e),
+                )
+                if type(shape) is Composite:
+                    all_null &= ~all_set
+
+        return all_set, all_null
+
     def _compare(self, op: type[Comparison], left: exp.Expr, right: exp.Expr) -> PredicateFormula:
         if (q := quantifier(right)) is not None:
             return self._quantified(op, left, *q)
@@ -317,8 +387,8 @@ class Evaluator:
                     preds = [self._compare(op, l, r) for l, r in pairs]
                     return ctx.any(f for _, f in preds), ctx.all(t for t, _ in preds)
                 case _:
-                    # TODO
-                    raise ValueError()
+                    # TODO: lexicographic, decided at the first unequal or NULL pair
+                    return self._fresh_pred()
 
     # READ 9.24, 9.25.3/4 support array syntax  -> expression ALL Array[...]
     # subquery and array form (right hand side)
@@ -335,27 +405,43 @@ class Evaluator:
     def _in(self, expr: exp.Expr):
         return self._fresh_pred()  # TODO
 
-    # re-check but i think only row as a special behavior, (other composite type are compared as is the value NULL)
-    # 9.2
     def _is(self, expr: exp.Is) -> PredicateFormula:
-        left, right, negate = expr.this, expr.expression, bool(expr.args.get("negate"))
+        left, right, negate = expr.this.unnest(), expr.expression, bool(expr.args.get("negate"))
+
         match right:
             case exp.Null():
-                match left:
-                    case _ if is_row(left):
-                        fields = [self.null(x) for x in left.expressions]
-                    case exp.TableColumn(name=name):
-                        fields = self.env.fields(name)
-                    case _:
-                        n = self.null(left)
-                        return (~n, n) if negate else (n, ~n)
+                return self._is_null(left, negate)
+            case exp.Boolean(this=value):
+                return self._is_true(left, value, negate)
+            case _:
+                return self._fresh_pred()
+
+    def _is_null(self, expr: exp.Expr, negate: bool) -> PredicateFormula:
+        match expr:
+            case _ if is_row(expr):
+                fields = [self.null(x) for x in expr.expressions]
                 hit = self.ctx.all(~f for f in fields) if negate else self.ctx.all(fields)
                 return hit, ~hit
-            case exp.Boolean(this=value):
-                t, f = self.pred(left)
-                hit = t if value else f
-                return (~hit, hit) if negate else (hit, ~hit)
-        return self._fresh_pred()
+
+            case exp.TableColumn(name=name):
+                fields = self.env.fields(name)
+                hit = self.ctx.all(~f for f in fields) if negate else self.ctx.all(fields)
+                return hit, ~hit
+
+            case _:
+                n = self.null(expr)
+                match self._shape(expr):
+                    case "scalar":
+                        return (~n, n) if negate else (n, ~n)
+                    case shape:
+                        all_set, all_null = self._may_composite(expr, shape)
+                hit = ~n & all_set if negate else n | all_null
+                return hit, ~hit
+
+    def _is_true(self, expr: exp.Expr, true: bool, negate: bool):
+        t, f = self.pred(expr)
+        hit = t if true else f
+        return (~hit, hit) if negate else (hit, ~hit)
 
     # composite type use the same rule as row (add this) 9.25.5/6, and it is composite = (<>) composite
     def _not_distinct(self, left: exp.Expr, right: exp.Expr):
