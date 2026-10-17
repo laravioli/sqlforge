@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NewType
 
 from sqlforge.introspection.catalog import DEFAULT_SEARCH_PATH, Table, View, mapping_schema, sources
 from sqlforge.introspection.structures import (
@@ -13,6 +13,10 @@ from sqlforge.introspection.structures import (
 )
 
 from .relation import ViewStore
+
+PGKey = NewType("PGKey", tuple[str | None, str])
+type Shape = Composite | Literal["scalar", "unknown"]
+type Fields = tuple[tuple[str, Oid], ...]
 
 
 class Catalog:
@@ -33,13 +37,13 @@ class Catalog:
         spaces = (ns,) if ns else self.search_path
         return next((t for s in spaces if (t := types.get((s, typ))) is not None), None)
 
-    def pg_type(self, key: tuple[str | None, str]):
+    def pg_type(self, key: PGKey):
         """
         resolve (ns,type) as a postgres type
         """
         return self._resolve(self._types_by_name, key[0], key[1])
 
-    def source(self, key: tuple[str | None, str]):
+    def source(self, key: PGKey):
         """
         resolve (ns,type) as a source
         """
@@ -61,11 +65,6 @@ class Catalog:
         while isinstance(t, DomainType):
             t = self._types.get(t.basetype)
         return t
-
-
-type Shape = Composite | Literal["scalar", "unknown"]
-
-type Fields = tuple[tuple[str, Oid], ...]
 
 
 @dataclass(frozen=True, slots=True)

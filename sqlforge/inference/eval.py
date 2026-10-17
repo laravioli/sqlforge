@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
-from typing import Literal, Protocol
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from sqlglot import exp
 
-from .catalog import Composite, Oid, Shape
-from .context import Context, Formula, Kind
-from .exception import StarNotExpanded, UnknownColumn
+from .catalog import Composite, Shape
+from .context import Formula, Kind
+from .exception import StarNotExpanded
 from .expressions import (
     Comparison,
     is_boolean_expr,
@@ -19,79 +19,13 @@ from .expressions import (
     quantifier,
 )
 from .notebook import Notebook
-from .relation import ColKey, Row, Subquery
+from .relation import ColType, Subquery
+
+if TYPE_CHECKING:
+    from .env import Env
 
 type PredicateFormula = tuple[Formula, Formula]
 type NullFormula = Formula
-
-
-class ScopeProtocol(Protocol):
-    ctx: Context
-    side: list[Formula]
-    notebook: Notebook
-    row_types: dict[ColKey, Oid]
-
-    def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery: ...
-    def shape(self, oid: Oid) -> Shape: ...
-
-
-@dataclass(frozen=True, slots=True)
-class Env:
-    """
-    A view of current null facts of a row, at this point of evaluation
-    """
-
-    scope: ScopeProtocol
-    nulls: Mapping[ColKey, Formula]
-    outer: Env | None
-
-    def evaluator(self):
-        return Evaluator(self)
-
-    def bind(self, *rows: Row) -> Env:
-        return replace(
-            self,
-            nulls={k: n for row in rows for k, n in row.nulls.items()},
-        )
-
-    def extend(self, *rows: Row) -> Env:
-        return replace(
-            self,
-            nulls={k: n for row in (self, *rows) for k, n in row.nulls.items()},
-        )
-
-    def null(self, key: ColKey) -> Formula:
-        env: Env | None = self
-        while env is not None:
-            if (formula := env.nulls.get(key)) is not None:
-                return formula
-            env = env.outer
-        raise UnknownColumn(key)
-
-    def fields(self, alias: str) -> list[Formula]:
-        """
-        Returns:
-               all formulas from one aliased table in a row
-        """
-        env: Env | None = self
-        while env is not None:
-            found = [f for (a, _), f in env.nulls.items() if a == alias]
-            if found:
-                return found
-            env = env.outer
-        raise UnknownColumn((alias, "*"))
-
-    def oid(self, col_key: ColKey) -> Oid | Literal["unknown"]:
-        """
-        Returns:
-                oid from one row column or unknown (cte, derived table)
-        """
-        env: Env | None = self
-        while env is not None:
-            if col_key in env.nulls:
-                return env.scope.row_types.get(col_key, "unknown")
-            env = env.outer
-        return "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +53,7 @@ class Evaluator:
                 return self.env.null((table, name))
 
             case exp.TableColumn():
-                return self.notebook.null("row", e) & ctx.all(self.env.fields(e.name))
+                return self.env.padded(e.name)
 
             # NOTE: function will also use Dot
             case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
@@ -265,6 +199,32 @@ class Evaluator:
             case _:
                 return self._memorized(e)
 
+    def type(self, e: exp.Expr) -> ColType:
+        """
+        catalog type of a column or of a field at the end of a path
+                Returns:
+                    pg_type oid or unknown
+        """
+        match e:
+            case exp.Paren(this=this) | exp.Alias(this=this):
+                return self.type(this)
+
+            case exp.Column(table=alias, name=col):
+                return self.env.type((alias, col))
+
+            case exp.Cast():
+                return "unknown"
+
+            case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
+                return self.env.type((row.name, field.name))
+
+            case exp.Dot(this=base, expression=field):
+                match self._shape(base):
+                    case Composite(fields=fields):
+                        return dict(fields).get(field.name, "unknown")
+
+        return "unknown"
+
     def _unknown(self, pred: PredicateFormula) -> NullFormula:
         """UNKNOWN as a null value"""
         t, f = pred
@@ -280,37 +240,15 @@ class Evaluator:
         holds = self.notebook.holds("value", e)
         return known & holds, known & ~holds
 
-    def _type(self, e: exp.Expr) -> Oid | Literal["unknown"]:
-        """
-        catalog type of a column or of a field at the end of a path
-                Returns:
-                    pg_type oid or unknown (cte, derived table))
-        """
-        match e:
-            case exp.Paren(this=this):
-                return self._type(this)
-
-            case exp.Column(table=table, name=name):
-                return self.env.oid((table, name))
-            case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
-                return self.env.oid((row.name, field.name))
-
-            case exp.Dot(this=base, expression=field):
-                match self._shape(base):
-                    case Composite(fields=fields):
-                        return dict(fields).get(field.name, "unknown")
-
-        return "unknown"
-
     def _shape(self, e: exp.Expr) -> Shape:
-        oid = self._type(e)
+        oid = self.type(e)
         return "unknown" if oid == "unknown" else self.env.scope.shape(oid)
 
     def _may_composite(self, e: exp.Expr, shape: Composite | Literal["unknown"]):
         match shape:
             case Composite(fields=()):  # no field: both tests hold
                 all_set = all_null = self.ctx.true
-            case Composite() | "unknown":  # with fields: not both
+            case Composite() | "unknown":
                 all_set, all_null = (
                     self.notebook.holds("all set", e),
                     self.notebook.holds("all null", e),
@@ -419,14 +357,14 @@ class Evaluator:
     def _is_null(self, expr: exp.Expr, negate: bool) -> PredicateFormula:
         match expr:
             case _ if is_row(expr):
-                fields = [self.null(x) for x in expr.expressions]
-                hit = self.ctx.all(~f for f in fields) if negate else self.ctx.all(fields)
-                return hit, ~hit
+                nulls = [self.null(x) for x in expr.expressions]
+                true = self.ctx.all(~n for n in nulls) if negate else self.ctx.all(nulls)
+                return true, ~true
 
-            case exp.TableColumn(name=name):
-                fields = self.env.fields(name)
-                hit = self.ctx.all(~f for f in fields) if negate else self.ctx.all(fields)
-                return hit, ~hit
+            case exp.TableColumn(name=alias):
+                nulls = self.env.nulls(alias)
+                true = self.ctx.all(~n for n in nulls) if negate else self.ctx.all(nulls)
+                return true, ~true
 
             case _:
                 n = self.null(expr)
@@ -435,8 +373,8 @@ class Evaluator:
                         return (~n, n) if negate else (n, ~n)
                     case shape:
                         all_set, all_null = self._may_composite(expr, shape)
-                hit = ~n & all_set if negate else n | all_null
-                return hit, ~hit
+                true = ~n & all_set if negate else n | all_null
+                return true, ~true
 
     def _is_true(self, expr: exp.Expr, true: bool, negate: bool):
         t, f = self.pred(expr)
@@ -447,7 +385,6 @@ class Evaluator:
     def _not_distinct(self, left: exp.Expr, right: exp.Expr):
         if is_row(left) and is_row(right):
             lr, rr = left.expressions, right.expressions
-            # postgres would error if length mismatch
             return self.ctx.all(self._same(x, y) for x, y in zip(lr, rr, strict=True))
         else:
             return self._same(left, right)

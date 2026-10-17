@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import Literal
 
+from .catalog import Oid
 from .context import Context, Formula, Kind
 from .lattice import Nullability
 
 type Alias = str
 type Column = str
 type ColKey = tuple[Alias, Column]  # alias.column
+type ColType = Oid | Literal["unknown"]
 
 
 def support(fs: Sequence[Formula]):
@@ -22,6 +25,7 @@ class Relation:
     ctx: Context
     columns: Sequence[str]
     nulls: Sequence[Formula]
+    types: Sequence[ColType]
     invariant: Formula
 
     @property
@@ -52,9 +56,18 @@ class Relation:
         )
 
     def row(self, alias: str):
+        columns = self.columns
         return Row(
-            nulls={(alias, k): v for k, v in zip(self.columns, self.nulls)},
-            invariant=self.invariant,
+            {
+                alias: Item(
+                    columns,
+                    self.nulls,
+                    self.types,
+                    self.ctx.false,
+                    {c: columns.index(c) for c in columns},
+                )
+            },
+            self.invariant,
         )
 
     def subquery(self, empty: bool | None):
@@ -95,15 +108,39 @@ class Template:
 
 
 @dataclass(frozen=True, slots=True)
+class Item:
+    """One FROM item inside a row"""
+
+    columns: Sequence[Column]
+    nulls: Sequence[Formula]
+    types: Sequence[ColType]
+    padded: Formula
+    index: dict[Column, int]
+
+    def null(self, column: Column) -> Formula:
+        """Raise: KeyError"""
+        return self.nulls[self.index[column]]
+
+    def type(self, column: Column) -> ColType:
+        """Raise: KeyError"""
+        return self.types[self.index[column]]
+
+    def pad(self, real: Formula) -> Item:
+        return replace(
+            self, nulls=[real.implies(n) for n in self.nulls], padded=real.implies(self.padded)
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Row:
     """The row being transformed inside one scope"""
 
-    nulls: Mapping[ColKey, Formula]
+    items: Mapping[Alias, Item]
     invariant: Formula
 
     @staticmethod
     def unit(ctx: Context):
-        return Row(nulls={}, invariant=ctx.true)
+        return Row(items={}, invariant=ctx.true)
 
 
 @dataclass(frozen=True, slots=True)

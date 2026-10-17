@@ -30,6 +30,7 @@ def union(left: Relation, right: Relation) -> Relation:
         ctx=left.ctx,
         columns=left.columns,
         nulls=[(side & l) | (~side & r) for l, r in zip(left.nulls, right.nulls, strict=True)],
+        types=left.types,
         invariant=(side.implies(left.invariant) & (~side).implies(right.invariant)),
     )
 
@@ -40,6 +41,7 @@ def intersection(left: Relation, right: Relation) -> Relation:
         ctx=ctx,
         columns=left.columns,
         nulls=left.nulls,
+        types=left.types,
         invariant=left.invariant
         & right.invariant
         & ctx.all(l.equiv(r) for l, r in zip(left.nulls, right.nulls, strict=True)),
@@ -47,7 +49,7 @@ def intersection(left: Relation, right: Relation) -> Relation:
 
 
 def filter_(row: Row, on: Formula) -> Row:
-    return Row(nulls=row.nulls, invariant=row.invariant & on)
+    return Row(row.items, row.invariant & on)
 
 
 class JoinKind(StrEnum):
@@ -73,11 +75,11 @@ class JoinKind(StrEnum):
 
 
 def cross(left: Row, right: Row) -> Row:
-    return Row(nulls={**left.nulls, **right.nulls}, invariant=left.invariant & right.invariant)
+    return Row({**left.items, **right.items}, left.invariant & right.invariant)
 
 
 def _pad(row: Row, real: Formula) -> Row:
-    return Row({k: real.implies(n) for k, n in row.nulls.items()}, real.implies(row.invariant))
+    return Row({a: i.pad(real) for a, i in row.items.items()}, real.implies(row.invariant))
 
 
 def join(ctx: Context, expr: exp.Join, left: Row, right: Row, on: Formula) -> Row:

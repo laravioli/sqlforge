@@ -9,13 +9,14 @@ from sqlglot.errors import SqlglotError
 from sqlglot.optimizer import Scope
 
 from . import transfert as t
-from .catalog import Catalog, Oid, Shape, Table, View
+from .catalog import Catalog, Oid, PGKey, Shape, Table, View
 from .context import Context, Formula, Kind
-from .eval import Env, Notebook
+from .env import Env
+from .eval import Notebook
 from .exception import Unsupported
 from .expressions import is_join_group, is_plain_aggregate
 from .prepare import prepare_view
-from .relation import ColKey, Relation, Row, Subquery, Template
+from .relation import Relation, Row, Subquery, Template
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,6 @@ class ScopedAnalyzer:
         self.ctx = analyzer.ctx
         self.side: list[Formula] = []
         self.notebook: Notebook = Notebook(self.ctx, None)
-        self.row_types: dict[ColKey, Oid] = {}
 
     def analyse(self):
         scope = self.scope
@@ -116,13 +116,13 @@ class ScopedAnalyzer:
         where = self.scope.expression.args.get("where")
         if where is None:
             return row
-        t_where, _ = Env(self, row.nulls, self.outer).evaluator().pred(where.this)
+        t_where, _ = Env(self, row.items, self.outer).evaluator().pred(where.this)
         return t.filter_(row, t_where)
 
     def _group_by(self, row: Row):
         if is_plain_aggregate(self.scope.expression):  # type: ignore
             no_input_row = self.ctx.fresh(Kind.EMPTY)
-            return Row(nulls=row.nulls, invariant=(~no_input_row).implies(row.invariant))
+            return Row(row.items, (~no_input_row).implies(row.invariant))
         return row
 
     def _having(self, row: Row):
@@ -133,12 +133,13 @@ class ScopedAnalyzer:
 
     def _project(self, row: Row) -> Relation:
         select = cast(exp.Select, self.scope.expression)
-        ev = Env(self, row.nulls, self.outer).evaluator()
+        ev = Env(self, row.items, self.outer).evaluator()
 
         return Relation(
             ctx=self.ctx,
             columns=[e.alias_or_name for e in select.selects],
             nulls=[ev.null(e) for e in select.selects],
+            types=[ev.type(e) for e in select.selects],
             invariant=row.invariant & self.ctx.all(self.side),
         )
 
@@ -153,11 +154,7 @@ class ScopedAnalyzer:
     def source(self, node: exp.Table | exp.Subquery, outer: None = None) -> Row: ...
     @overload
     def source(self, node: exp.Lateral, outer: Env) -> Row: ...
-    def source(
-        self,
-        node: exp.Table | exp.Subquery | exp.Lateral,
-        outer: Env | None = None,
-    ) -> Row:
+    def source(self, node: exp.Table | exp.Subquery | exp.Lateral, outer: Env | None = None) -> Row:
         alias = node.alias_or_name
         if alias not in self.scope.selected_sources:
             raise Unsupported(f"source {type(node).__name__} {alias!r}")
@@ -169,7 +166,6 @@ class ScopedAnalyzer:
                 if isinstance(src, Scope):
                     return self.analyzer.cte(src, alias)
                 else:
-                    self._add_source_types((node.db or None, node.name), alias)
                     return self.analyzer.scan(src, alias)
 
             case exp.Subquery():
@@ -180,11 +176,6 @@ class ScopedAnalyzer:
 
             case _:
                 raise Unsupported(f"source {type(node).__name__}")
-
-    def _add_source_types(self, key: tuple[str | None, str], alias: str):
-        src = self.analyzer.catalog.source(key)
-        if src is not None:
-            self.row_types.update({(alias, k): v.attr_type for k, v in src.columns.items()})
 
     def shape(self, oid: Oid) -> Shape:
         return self.analyzer.catalog.shape(oid)
@@ -199,33 +190,34 @@ class Analyzer:
         self.ctx = ctx
         self.catalog = catalog
         self._cte_cache: dict[Scope, Template] = {}
-        self._scan_cache: dict[tuple[str | None, str], Template] = {}
+        self._view_cache: dict[tuple[str | None, str], Template] = {}
 
     def run(self, scope: Scope):
         return ScopedAnalyzer(self, scope, None).analyse()
 
     def scan(self, tab: exp.Table, alias: str) -> Row:
-        key = (tab.db or None, tab.name)
-        template = self._scan_cache.get(key)
 
-        if template is not None:
-            return template.materialize().row(alias)
-
+        key = PGKey((tab.db or None, tab.name))
         source = self.catalog.source(key)
+
         match source:
             case Table() as table:
-                relation = self._table_relation(table)
+                return self._table_relation(table).row(alias)
 
             case View() as view:
+                template = self._view_cache.get(key)
+                if template is not None:
+                    return template.materialize().row(alias)
+
                 relation = self._view_relation(view)
+                self._view_cache[key] = Template(relation)
+                return relation.row(alias)
 
             case None:
                 raise Unsupported(f"Unknown source {key}")
 
-        self._scan_cache[key] = Template(relation)
-        return relation.row(alias)
-
     def _table_relation(self, source: Table) -> Relation:
+
         return Relation(
             ctx=self.ctx,
             columns=tuple(source.columns.keys()),
@@ -233,6 +225,7 @@ class Analyzer:
                 self.ctx.fresh(Kind.BASE) if source.maybe_null(col.name) else self.ctx.false
                 for col in source.columns.values()
             ],
+            types=[c.attr_type for c in source.columns.values()],
             invariant=self.ctx.true,
         )
         # compression is not needed
@@ -240,27 +233,33 @@ class Analyzer:
     def _view_relation(self, view: View) -> Relation:
         key = (view.ns, view.name)
         stored_view = self.catalog.views.import_(self.ctx, key)
+
         if stored_view is not None:
             return Template(
                 Relation(
                     ctx=self.ctx,
                     columns=tuple(view.columns),
                     nulls=stored_view.nulls,
+                    types=[c.attr_type for c in view.columns.values()],
                     invariant=stored_view.invariant,
                 )
             ).materialize()
 
         try:
             relation = self.run(prepare_view(view, self.catalog.mapping_schema))
+
         except Exception as e:
             if not isinstance(e, (SqlglotError, Unsupported)):
                 logger.warning("inference failed on view %s.%s", *key, exc_info=e)
+
             relation = Relation(  # view we can't analyze: every column may be NULL
                 ctx=self.ctx,
                 columns=tuple(view.columns),
                 nulls=[self.ctx.fresh(Kind.MAYBE) for _ in view.columns],
+                types=[c.attr_type for c in view.columns.values()],
                 invariant=self.ctx.true,
             )
+
         self.catalog.views.export(self.ctx, key, relation)
         return relation
 
@@ -273,11 +272,3 @@ class Analyzer:
             return relation.row(alias)
 
         return template.materialize().row(alias)
-
-
-# Star expansion rules
-# The composite_value.* syntax results in column expansion of this kind when it appears at
-# the top level of a SELECT output list, a RETURNING list in INSERT/UPDATE/DELETE/MERGE,
-# a VALUES clause, or a row constructor. In all other contexts (including when nested inside one of
-# those constructs), attaching .* to a composite value does not change the value, since it means “all
-# columns” and so the same composite value is produced again.
