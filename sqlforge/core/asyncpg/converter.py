@@ -17,6 +17,7 @@ from sqlforge.introspection.structures import (
     EnumType,
     Oid,
     PGTypeRegister,
+    PseudoType,
     RangeType,
     TypeKind,
 )
@@ -24,6 +25,8 @@ from sqlforge.introspection.structures import (
 from .utils import isidentifier
 
 type PythonTypeRegister = dict[Oid, PythonType]
+
+ANY = "typing.Any"
 
 
 def type_name(t) -> str:
@@ -110,17 +113,17 @@ def python_type(oid: Oid, register: PGTypeRegister) -> PythonType:
             return f"list[{rng}]" if kind is TypeKind.MULTI_RANGE else rng
 
         case CompositeType() | DomainType() | EnumType() as t if t.is_user_defined:
-            assert isidentifier(t.name)
-            return camel_case(t.name)
+            name = camel_case(t.name)
+            return name if isidentifier(name) else ANY  # "my-table", "Weird Type"
 
         case DomainType(basetype=base):
             return python_type(base, register)
 
-        case BaseType(name=name):
-            return PG_BASE_TYPE.get(name, "Any")
+        case BaseType(name=name) | PseudoType(name=name):
+            return PG_BASE_TYPE.get(name, ANY)
 
         case _:  # system composite types
-            return "Any"
+            return ANY
 
 
 def python_types(register: PGTypeRegister) -> PythonTypeRegister:

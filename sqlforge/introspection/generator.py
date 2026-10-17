@@ -19,6 +19,7 @@ class PgSchemaGenerator:
             .import_("datetime")
             .import_("decimal")
             .import_("ipaddress")
+            .import_("typing")
             .import_("uuid")
             .newline()
         )

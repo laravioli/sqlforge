@@ -15,6 +15,7 @@ from .structures import (
     Oid,
     PGAttribute,
     PGTypeRegister,
+    PseudoType,
     RangeType,
     TypeKind,
     TypeRecord,
@@ -93,7 +94,7 @@ class PgFetcher:
                     )
 
                 case TypeKind.PSEUDO_TYPE:
-                    raise NotImplementedError()
+                    register[rec["oid"]] = PseudoType.convert(rec, kind=kind)
 
                 case TypeKind.RANGE | TypeKind.MULTI_RANGE:
                     register[rec["oid"]] = RangeType.convert(

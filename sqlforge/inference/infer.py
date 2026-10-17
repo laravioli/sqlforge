@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import cached_property, reduce
 from typing import cast, overload
 
@@ -15,6 +16,8 @@ from .exception import Unsupported
 from .expressions import is_join_group, is_plain_aggregate
 from .prepare import prepare_view
 from .relation import ColKey, Relation, Row, Subquery, Template
+
+logger = logging.getLogger(__name__)
 
 
 class ScopedAnalyzer:
@@ -249,7 +252,9 @@ class Analyzer:
 
         try:
             relation = self.run(prepare_view(view, self.catalog.mapping_schema))
-        except (SqlglotError, Unsupported):
+        except Exception as e:
+            if not isinstance(e, (SqlglotError, Unsupported)):
+                logger.warning("inference failed on view %s.%s", *key, exc_info=e)
             relation = Relation(  # view we can't analyze: every column may be NULL
                 ctx=self.ctx,
                 columns=tuple(view.columns),

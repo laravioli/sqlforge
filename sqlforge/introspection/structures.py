@@ -89,6 +89,10 @@ class BaseType(PGType):
     pass
 
 
+class PseudoType(PGType):
+    pass  # record, void, …: no structure
+
+
 class ArrayType(PGType):
     elemtype: Oid  # element type (pg_type.typelem)
 

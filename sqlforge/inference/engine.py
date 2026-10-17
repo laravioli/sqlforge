@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -14,6 +15,8 @@ from .exception import ByPassed, Unsupported
 from .infer import Analyzer
 from .lattice import MAYBE_NULL, Nullability
 from .prepare import prepare_sql
+
+logger = logging.getLogger(__name__)
 
 
 class Engine:
@@ -36,8 +39,8 @@ class Engine:
         if not attrs:
             return Analysis(columns=(), bypassed=False)
 
+        error, internal = None, False
         try:
-            error = None
             scope = prepare_sql(statement.source, self.catalog.mapping_schema)
             bypassed = False
 
@@ -48,12 +51,19 @@ class Engine:
         except (SqlglotError, Unsupported) as e:
             nulls, bypassed, error = [MAYBE_NULL] * len(attrs), isinstance(e, ByPassed), str(e)
 
+        except Exception as e:  # bug
+            logger.warning(
+                "inference failed on %s, all columns may be NULL", statement.name, exc_info=e
+            )
+            nulls, bypassed, error, internal = [MAYBE_NULL] * len(attrs), False, repr(e), True
+
         return Analysis(
             columns=tuple(
                 ColumnResult(name, type_, null) for (name, type_), null in zip(attrs, nulls)
             ),
             bypassed=bypassed,
             error=error,
+            internal=internal,
         )
 
 
@@ -73,6 +83,7 @@ class Analysis:
     columns: tuple[ColumnResult, ...]
     bypassed: bool
     error: str | None = None
+    internal: bool = False
 
 
 @dataclass
