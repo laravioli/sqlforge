@@ -243,19 +243,21 @@ class Evaluator:
         oid = self.type(e)
         return "unknown" if oid == "unknown" else self.env.scope.shape(oid)
 
-    def _may_composite(self, e: exp.Expr, shape: Composite | Literal["unknown"]):
+    def _may_composite(
+        self, e: exp.Expr, shape: Composite | Literal["unknown"]
+    ) -> PredicateFormula:
         match shape:
             case Composite(fields=()):  # no field: both tests hold
-                all_set = all_null = self.ctx.true
+                all_non_null = all_null = self.ctx.true
             case Composite() | "unknown":
-                all_set, all_null = (
-                    self.notebook.holds("all set", e),
-                    self.notebook.holds("all null", e),
+                all_non_null, all_null = (
+                    self.notebook.holds("all_non_null", e),
+                    self.notebook.holds("all_null", e),
                 )
                 if type(shape) is Composite:
-                    all_null &= ~all_set
+                    all_null &= ~all_non_null
 
-        return all_set, all_null
+        return all_non_null, all_null
 
     def _compare(self, op: type[Comparison], left: exp.Expr, right: exp.Expr) -> PredicateFormula:
         if (q := quantifier(right)) is not None:
@@ -306,6 +308,12 @@ class Evaluator:
     ) -> PredicateFormula:
 
         ctx = self.ctx
+
+        match left, right:
+            case _, Subquery():
+                empty = right.empty
+                fresh_pred = self._fresh_pred()
+                return ~empty & fresh_pred[0], ~empty & fresh_pred[1]
 
         if isinstance(right, Subquery):
             # row op (subquery)
@@ -371,8 +379,8 @@ class Evaluator:
                     case "scalar":
                         return (~n, n) if negate else (n, ~n)
                     case shape:
-                        all_set, all_null = self._may_composite(expr, shape)
-                true = ~n & all_set if negate else n | all_null
+                        all_non_null, all_null = self._may_composite(expr, shape)
+                true = ~n & all_non_null if negate else n | all_null
                 return true, ~true
 
     def _is_true(self, expr: exp.Expr, true: bool, negate: bool):

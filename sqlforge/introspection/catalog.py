@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from sqlglot import exp
+from sqlglot.dialects.postgres import Postgres
 from sqlglot.expressions.datatypes import DataType
 from sqlglot.schema import MappingSchema
 
@@ -65,7 +66,9 @@ class SearchPathSchema(MappingSchema):
     """ns -> table -> columns; an unqualified table is looked up along the search path"""
 
     def __init__(self, mapping: dict, search_path: Sequence[str]):
-        super().__init__(mapping, dialect="postgres", normalize=False)
+        postgres = Postgres()
+        postgres.SUPPORTS_STRUCT_STAR_EXPANSION = True  # type: ignore
+        super().__init__(mapping, dialect=postgres, normalize=False)
         self.search_path = tuple(search_path)
 
     def find(
@@ -91,6 +94,17 @@ def mapping_schema(
                 return DataType(
                     this=DataType.Type.ARRAY,
                     expressions=[sqlglot_type(elem, register)],
+                    nested=True,
+                )
+            case CompositeType(attributes=attrs):
+                return DataType(
+                    this=DataType.Type.STRUCT,
+                    expressions=[
+                        exp.ColumnDef(
+                            this=exp.to_identifier(a.name), kind=sqlglot_type(a.attr_type, register)
+                        )
+                        for a in attrs
+                    ],
                     nested=True,
                 )
             case t:

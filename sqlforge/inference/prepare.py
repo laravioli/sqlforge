@@ -5,6 +5,7 @@ from collections.abc import Callable
 from sqlglot import exp, parse_one
 from sqlglot.optimizer import Scope, build_scope
 from sqlglot.optimizer.qualify import qualify
+from sqlglot.optimizer.simplify import simplify_parens
 from sqlglot.schema import MappingSchema
 
 from sqlforge.core.structures import SQL
@@ -54,14 +55,20 @@ def bypass(ast: exp.Expr):
     return any(fn(ast) for fn in BYPASS)
 
 
+def _simplify_parens(ast: exp.Expr) -> exp.Expr:
+    """only sqlglot's paren rule of simplify, bottom-up: drops the parens SQL doesn't need"""
+    for paren in reversed(list(ast.find_all(exp.Paren, bfs=False))):
+        paren.replace(simplify_parens(paren, "postgres"))
+    return ast
+
+
 def _prepare(ast: exp.Expr, name: str, schema: MappingSchema) -> Scope:
     scope = None
 
     if bypass(ast):
         raise ByPassed("The analyzer does not support this statement yet")
 
-    ast = qualify(ast, schema=schema, dialect="postgres")
-    scope = build_scope(ast)
+    scope = build_scope(_simplify_parens(qualify(ast, schema=schema, dialect="postgres")))
 
     if scope is None:
         raise Unsupported(f"{name} could not create a sqlglot scope")

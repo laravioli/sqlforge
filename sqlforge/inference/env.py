@@ -52,7 +52,7 @@ class Env:
         )
 
     def item(self, alias: Alias) -> Item:
-        """the FROM item `alias`, and the env (scope) that owns it"""
+        """the FROM item `alias`"""
         env: Env | None = self
         while env is not None:
             if (item := env.items.get(alias)) is not None:
