@@ -38,7 +38,7 @@ MIB = 2**20
 
 def new_bdd():
     if _bdd.__name__ == "dd.cudd":
-        bdd = _bdd.BDD(memory_estimate=64 * MIB, initial_cache_size=2**10)  # type: ignore[call-arg]
+        bdd = _bdd.BDD(memory_estimate=16 * MIB, initial_cache_size=2**10)  # type: ignore[call-arg]
         bdd.configure(reordering=True, max_memory=1024 * MIB)
     else:
         bdd = _bdd.BDD()

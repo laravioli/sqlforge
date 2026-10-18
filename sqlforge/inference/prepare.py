@@ -4,9 +4,7 @@ from collections.abc import Callable
 
 from sqlglot import exp, parse_one
 from sqlglot.optimizer import Scope, build_scope
-from sqlglot.optimizer.annotate_types import annotate_types
 from sqlglot.optimizer.qualify import qualify
-from sqlglot.optimizer.simplify import simplify
 from sqlglot.schema import MappingSchema
 
 from sqlforge.core.structures import SQL
@@ -62,14 +60,7 @@ def _prepare(ast: exp.Expr, name: str, schema: MappingSchema) -> Scope:
     if bypass(ast):
         raise ByPassed("The analyzer does not support this statement yet")
 
-    ast = simplify(
-        annotate_types(
-            qualify(ast, schema=schema, dialect="postgres"),
-            schema=schema,
-            dialect="postgres",
-        ),
-        dialect="postgres",
-    )
+    ast = qualify(ast, schema=schema, dialect="postgres")
     scope = build_scope(ast)
 
     if scope is None:

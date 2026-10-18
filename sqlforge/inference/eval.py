@@ -189,7 +189,6 @@ class Evaluator:
                 return self._coalesce([e.this, *e.expressions])
 
             case exp.Between():
-                # simplified by sqlglot
                 return self._between(e)
 
             case _ if is_boolean_expr(e):
