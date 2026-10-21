@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -29,10 +30,17 @@ class Engine:
         return Engine(catalog=Catalog(type_register), statements=statements)
 
     def analyze(self) -> list[AnalyzedSQL]:
-        return [
+
+        s = time.perf_counter_ns()
+        analyze = [
             AnalyzedSQL(stmt.source, stmt.typed_params, self.analyze_one(stmt))
             for stmt in self.statements
         ]
+        e = time.perf_counter_ns()
+        size = len([a for a in analyze if a.analysis.bypassed is False])
+        logger.debug(size)
+        logger.debug("time : %f ms", (e - s) / (size * 1000000))
+        return analyze
 
     def analyze_one(self, statement: TypedSQL) -> Analysis:
         attrs = statement.typed_attrs

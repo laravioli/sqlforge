@@ -8,13 +8,12 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 from sqlglot.optimizer import Scope
 
-from . import transfert as t
+from . import transfer as t
 from .catalog import Catalog, Oid, PGKey, Shape, Table, View
 from .context import Context, Formula, Kind
-from .env import Env
-from .eval import Notebook
+from .evaluation import Env, Notebook
+from .evaluation.syntax import is_join_group, is_plain_aggregate
 from .exception import Unsupported
-from .expressions import is_join_group, is_plain_aggregate
 from .prepare import prepare_view
 from .relation import Relation, Row, Subquery, Template
 
@@ -28,7 +27,7 @@ class ScopedAnalyzer:
         self.outer = outer
         self.ctx = analyzer.ctx
         self.side: list[Formula] = []
-        self.notebook: Notebook = Notebook(self.ctx, None)
+        self.notebook: Notebook = Notebook(self.ctx)
 
     def analyse(self):
         scope = self.scope
@@ -139,7 +138,7 @@ class ScopedAnalyzer:
             ctx=self.ctx,
             columns=[e.alias_or_name for e in select.selects],
             nulls=[ev.null(e) for e in select.selects],
-            types=[ev.type(e) for e in select.selects],
+            types=[ev.type_oid(e) for e in select.selects],
             invariant=row.invariant & self.ctx.all(self.side),
         )
 

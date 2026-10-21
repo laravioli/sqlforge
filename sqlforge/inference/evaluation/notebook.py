@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from sqlglot import exp
 
-from .context import Context, Formula, Kind
-from .expressions import Comparison
+from sqlforge.inference.context import Context, Formula, Kind
+
+from .syntax import Comparison
 
 
 @dataclass
@@ -15,10 +16,11 @@ class Notebook:
     If a fact is not reusable, a new var is returned instead.
     """
 
-    ctx: Context
-    functions: None  # TODO
-    _vars: dict[tuple[str, *tuple[exp.Expr, ...]], Formula] = field(default_factory=dict)
-    _reusables: dict[exp.Expr, bool] = field(default_factory=dict)
+    def __init__(self, ctx: Context):
+        self.ctx = ctx
+        self.functions = None
+        self._vars: dict[tuple[str, *tuple[exp.Expr, ...]], Formula] = {}
+        self._reusables: dict[exp.Expr, bool] = {}
 
     def _var(self, fact: tuple[str, *tuple[exp.Expr, ...]], kind: Kind) -> Formula:
         var = self._vars.get(fact)

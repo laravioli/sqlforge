@@ -109,25 +109,27 @@ class Template:
 
 @dataclass(frozen=True, slots=True)
 class Item:
-    """One FROM item inside a row"""
-
     columns: Sequence[Column]
-    nulls: Sequence[Formula]
+    fields: Sequence[Formula]
     types: Sequence[ColType]
     padded: Formula
-    index: dict[Column, int]
+    _index: dict[Column, int]
 
-    def null(self, column: Column) -> Formula:
-        """Raise: KeyError"""
-        return self.nulls[self.index[column]]
+    @property
+    def null(self) -> Formula:
+        return self.padded
 
-    def type(self, column: Column) -> ColType:
+    def null_of(self, column: Column) -> Formula:
         """Raise: KeyError"""
-        return self.types[self.index[column]]
+        return self.fields[self._index[column]]
+
+    def type_of(self, column: Column) -> ColType:
+        """Raise: KeyError"""
+        return self.types[self._index[column]]
 
     def pad(self, real: Formula) -> Item:
         return replace(
-            self, nulls=[real.implies(n) for n in self.nulls], padded=real.implies(self.padded)
+            self, fields=[real.implies(n) for n in self.fields], padded=real.implies(self.padded)
         )
 
 

@@ -6,12 +6,13 @@ from typing import Protocol
 
 from sqlglot import exp
 
-from .catalog import Oid, Shape
-from .context import Context, Formula
-from .eval import Evaluator
-from .exception import UnknownColumn
+from sqlforge.inference.catalog import Oid, Shape
+from sqlforge.inference.context import Context, Formula
+from sqlforge.inference.exception import UnknownColumn
+from sqlforge.inference.relation import Alias, ColKey, ColType, Item, Row, Subquery
+
+from .evaluator import Evaluator
 from .notebook import Notebook
-from .relation import Alias, ColKey, ColType, Item, Row, Subquery
 
 type PredicateFormula = tuple[Formula, Formula]
 type NullFormula = Formula
@@ -60,23 +61,23 @@ class Env:
             env = env.outer
         raise UnknownColumn((alias, "*"))
 
-    def nulls(self, alias: Alias) -> Sequence[Formula]:
+    def fields(self, alias: Alias) -> Sequence[Formula]:
         """null formulas of every column of `alias`, in order"""
-        return self.item(alias).nulls
+        return self.item(alias).fields
 
-    def padded(self, alias: Alias) -> Formula:
+    def null(self, alias: Alias) -> Formula:
         """the whole row `alias` is NULL: only when an outer join padded it"""
         return self.item(alias).padded
 
-    def null(self, key: ColKey) -> Formula:
+    def null_of(self, key: ColKey) -> Formula:
         try:
-            return self.item(key[0]).null(key[1])
+            return self.item(key[0]).null_of(key[1])
         except KeyError:
             raise UnknownColumn(key)
 
-    def type(self, key: ColKey) -> ColType:
+    def type_oid(self, key: ColKey) -> ColType:
         """oid from one row column or unknown (cte, derived table)"""
         try:
-            return self.item(key[0]).type(key[1])
+            return self.item(key[0]).type_of(key[1])
         except KeyError:
             raise UnknownColumn(key)

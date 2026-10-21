@@ -11,8 +11,8 @@ from sqlglot.schema import MappingSchema
 from sqlforge.core.structures import SQL
 from sqlforge.introspection.catalog import View
 
+from .evaluation.syntax import COMPARISON_PREDICATES
 from .exception import ByPassed, Unsupported
-from .expressions import COMPARISON_PREDICATES
 
 
 def not_query(ast: exp.Expr) -> bool:
