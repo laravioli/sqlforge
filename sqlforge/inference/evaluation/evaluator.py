@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlglot import exp
 
-from sqlforge.inference.catalog import Composite, Shape
+from sqlforge.inference.catalog import Composite
 from sqlforge.inference.context import Formula, Kind
 from sqlforge.inference.exception import StarNotExpanded
 from sqlforge.inference.relation import Item, Subquery
@@ -23,17 +23,16 @@ from .syntax import (
     is_strict_binary_operator,
     quantifier,
 )
+from .type_evaluator import TypeEvaluator
 
 if TYPE_CHECKING:
     from .env import Env
-
-type NullFormula = Formula
-type PredicateFormula = tuple[Formula, Formula]
 
 
 @dataclass(frozen=True, slots=True)
 class Evaluator:
     env: Env
+    types: TypeEvaluator
 
     @property
     def ctx(self):
@@ -43,68 +42,10 @@ class Evaluator:
     def notebook(self) -> Notebook:
         return self.env.scope.notebook
 
-    def _all(self, ps: Sequence[Pred]):
-        return Pred(self.ctx.all(p.t for p in ps), self.ctx.any(p.f for p in ps))
+    def type_of(self, e: exp.Expr):
+        return self.types.type(e)
 
-    def _any(self, ps: Sequence[Pred]):
-        return Pred(self.ctx.any(p.t for p in ps), self.ctx.all(p.f for p in ps))
-
-    def _value(self, e: exp.Expr) -> Value:
-        """
-        evaluate expression nullability and build a value
-        """
-        match e.unnest():
-            case exp.TableColumn(name=alias):
-                return self.env.item(alias)
-
-            case exp.Cast(this=inner) as c:
-                return Opaque(self.null(inner), c, "unknown")  # TODO
-
-            case x if is_row(x):
-                return Tuple(self.ctx.false, x.expressions, self.null)
-
-            case x if is_scalar(x):
-                return Scalar(self.null(e))
-
-            case x:
-                match self._shape(x):
-                    case "scalar":
-                        return Scalar(self.null(e))
-                    case Composite() | "unknown" as shape:
-                        return Opaque(self.null(x), x, shape)
-
-    def type_oid(self, e: exp.Expr) -> int | Literal["unknown"]:
-        """
-        catalog type of a column, a field at the end of a path, or a cast
-                Returns:
-                    pg_type oid or unknown
-        """
-        match e:
-            case exp.Paren(this=this) | exp.Alias(this=this):
-                return self.type_oid(this)
-
-            case exp.Column(table=alias, name=col):
-                return self.env.type_oid((alias, col))
-
-            case exp.Cast():
-                return "unknown"  # TODO
-
-            case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
-                return self.env.type_oid((row.name, field.name))
-
-            case exp.Dot(this=base, expression=field):
-                match self._shape(base):
-                    case Composite(fields=fields):
-                        return dict(fields).get(field.name, "unknown")
-
-        return "unknown"
-
-    def _shape(self, e: exp.Expr) -> Shape:
-        """ask the catalog using an expr type oid"""
-        oid = self.type_oid(e)
-        return "unknown" if oid == "unknown" else self.env.scope.shape(oid)
-
-    def null(self, e: exp.Expr) -> NullFormula:
+    def null(self, e: exp.Expr) -> Formula:
         ctx = self.ctx
 
         match e:
@@ -124,10 +65,10 @@ class Evaluator:
                 return self.env.null_of((row.name, field.name))
 
             case exp.Dot(this=base):  # (composite).f
-                match self._value(base):
-                    case Opaque(null=null, shape=shape):
-                        all_non_null, all_null = self._may_composite(base, shape)
-                        return null | (~all_non_null & (all_null | self.notebook.null("field", e)))
+                value = self._value(base)
+                match value:
+                    case Opaque():
+                        return value.field_null(self.notebook.null("field", e))
                     case _:
                         raise ValueError(f"{base} can't be dotted")
 
@@ -155,15 +96,14 @@ class Evaluator:
                 return ctx.all(self.null(expr) for expr in [head, *tail])
 
             case exp.Nullif(this=left, expression=right):
-                l_null, r_null = self.null(left), self.null(right)
-                eq = self.notebook.compare(exp.EQ, left, right)
-                return l_null | (~r_null & eq)
+                l, r = self._value(left), self._value(right)
+                return l.null | self._compare_values(exp.EQ, l, r, left, right).t
 
             case exp.Case():
                 return ctx.any(taken & self.null(r) for taken, r in self._case(e))
 
             case _ if is_boolean_expr(e):
-                return self._unknown(self.pred(e))
+                return self.pred(e).as_null
 
             case exp.Neg(this=this) | exp.BitwiseNot(this=this):
                 return self.null(this)
@@ -187,64 +127,53 @@ class Evaluator:
             case _:
                 return ctx.fresh(Kind.MAYBE)
 
-    def pred(self, e: exp.Expr) -> PredicateFormula:
-        """
-        dual-rail encoding:
-            True:   (1,0)
-            False:  (0,1)
-            Unknow: (0,0)
-        """
-
+    def pred(self, e: exp.Expr) -> Pred:
         ctx = self.ctx
-
         match e:
             case exp.Paren(this=this):
                 return self.pred(this)
 
-            case exp.And(this=left, expression=right):
-                tl, fl = self.pred(left)
-                tr, fr = self.pred(right)
-                return tl & tr, fl | fr
+            case exp.And(this=l, expression=r):
+                return self.pred(l) & self.pred(r)
 
-            case exp.Or(this=left, expression=right):
-                tl, fl = self.pred(left)
-                tr, fr = self.pred(right)
-                return tl | tr, fl & fr
+            case exp.Or(this=l, expression=r):
+                return self.pred(l) | self.pred(r)
 
             case exp.Not(this=this):
-                t, f = self.pred(this)
-                return f, t
+                return ~self.pred(this)
 
             case exp.Null():
-                return ctx.false, ctx.false
+                return Pred(ctx.false, ctx.false)
 
-            case exp.Boolean(this=this):
-                return (ctx.true, ctx.false) if this else (ctx.false, ctx.true)
+            case exp.Boolean(this=truth):
+                p = Pred.of(holds=ctx.true)
+                return p if truth else ~p
 
             case exp.Is():
                 return self._is(e)
 
-            case _ if is_comparison(e):
-                return self._compare(type(e), e.left, e.right)
+            case exp.Expr(left=l, right=r) if is_comparison(e):
+                if (q := quantifier(r)) is not None:
+                    return self._quantified(type(e), l, *q)
+                else:
+                    return self._compare(type(e), self._value(l), self._value(r), l, r)
 
-            case exp.NullSafeEQ(this=left, expression=right):
-                t = self._not_distinct(left, right)
-                return (t, ~t)
+            case exp.NullSafeEQ(left=l, right=r):
+                return Pred.of(holds=self._not_distinct(l, r))
 
-            case exp.NullSafeNEQ(this=left, expression=right):
-                t = self._not_distinct(left, right)
-                return (~t, t)
+            case exp.NullSafeNEQ(left=l, right=r):
+                return ~Pred.of(holds=self._not_distinct(l, r))
 
             case exp.In():
                 return self._in(e)
 
             case exp.Exists(this=query):
                 sub = self._subquery(query.unnest())
-                return ~sub.empty, sub.empty
+                return Pred.of(holds=~sub.empty)
 
             case exp.Case():
                 paths = [(taken, self.pred(r)) for taken, r in self._case(e)]
-                return (
+                return Pred(
                     ctx.any(taken & t for taken, (t, _) in paths),
                     ctx.any(taken & f for taken, (_, f) in paths),
                 )
@@ -255,107 +184,77 @@ class Evaluator:
             case exp.Between():
                 return self._between(e)
 
-            case _ if is_boolean_expr(e):
-                # avoid infinite loop with null
-                return self._fresh_pred()
-
-            case _:  # boolean value
-                return self._memorized(e)
-
-    def _unknown(self, pred: PredicateFormula) -> NullFormula:
-        """UNKNOWN as a null value"""
-        t, f = pred
-        return ~t & ~f
-
-    def _fresh_pred(self) -> PredicateFormula:
-        """fresh dual-rail encoding"""
-        u, v = self.ctx.fresh(Kind.TRUTH), self.ctx.fresh(Kind.TRUTH)
-        return u, ~u & v
-
-    def _memorized(self, e: exp.Expr) -> PredicateFormula:
-        known = ~self.null(e)
-        holds = self.notebook.holds("value", e)
-        return known & holds, known & ~holds
-
-    def _may_composite(
-        self, e: exp.Expr, shape: Composite | Literal["unknown"]
-    ) -> PredicateFormula:
-        match shape:
-            case Composite(fields=()):  # no field: both tests hold
-                all_non_null = all_null = self.ctx.true
-            case Composite() | "unknown":
-                all_non_null, all_null = (
-                    self.notebook.holds("all_non_null", e),
-                    self.notebook.holds("all_null", e),
+            case _:
+                known = (
+                    ~self.notebook.null("pred", e)  # self.null(e) would call back into self.pred(e)
+                    if is_boolean_expr(e)
+                    else ~self.null(e)
                 )
-                if type(shape) is Composite:
-                    all_null &= ~all_non_null
+                return Pred.of(holds=self.notebook.holds("pred", e), known=known)
 
-        return all_non_null, all_null
+    def _all(self, ps: Sequence[Pred]):
+        return Pred(self.ctx.all(p.t for p in ps), self.ctx.any(p.f for p in ps))
 
-    def _compare(self, op: type[Comparison], left: exp.Expr, right: exp.Expr) -> PredicateFormula:
-        if (q := quantifier(right)) is not None:
-            return self._quantified(op, left, *q)
-        return self._compare_values(op, self._value(left), self._value(right), left, right)
+    def _any(self, ps: Sequence[Pred]):
+        return Pred(self.ctx.any(p.t for p in ps), self.ctx.all(p.f for p in ps))
+
+    def _value(self, e: exp.Expr) -> Value:
+        """
+        evaluate expression nullability and build a value
+        """
+        e = e.unnest()
+        match e:
+            case exp.TableColumn(name=alias):
+                return self.env.item(alias)
+
+            case x if is_row(x):
+                return Tuple(self.ctx.false, x.expressions, self.null)
+
+            case x if is_scalar(x):
+                return Scalar(self.null(x))
+
+            case x:
+                shape = self.types.shape(x)
+                match shape:
+                    case "scalar":
+                        return Scalar(self.null(x))
+                    case Composite(fields=()):
+                        all_non_null = all_null = self.ctx.true
+                    case Composite():
+                        all_non_null = self.notebook.holds("all_non_null", x)
+                        all_null = ~all_non_null & self.notebook.holds("all_null", x)
+                    case "unknown":
+                        all_non_null = self.notebook.holds("all_non_null", x)
+                        all_null = self.notebook.holds("all_null", x)
+
+                return Opaque(self.null(x), all_null, all_non_null, shape)
+
+    def _compare(
+        self, op: type[Comparison], l: Value, r: Value, left: exp.Expr, right: exp.Expr
+    ) -> Pred:
+        """
+        `left op right` as written (9.25.5): ROW(...) op ROW(...) compares field by field,
+        anything else compares as values (9.25.6). A cast row is not a Tuple, so it compares as a value.
+        (IN lists and subqueries use the other rule, see _row_constructor.)
+        """
+        if isinstance(l, Tuple) and isinstance(r, Tuple):
+            return self._row_compare(op, l, r)
+        return self._compare_values(op, l, r, left, right)
 
     def _compare_values(
-        self, op: type[Comparison], l: Value, r: Value, left: exp.Expr, right: exp.Expr, rows=True
-    ) -> PredicateFormula:
+        self, op: type[Comparison], l: Value, r: Value, left: exp.Expr, right: exp.Expr
+    ) -> Pred:
         """
-        `left op right` on operands already evaluated (so callers evaluate each operand once).
-        rows: ROW(...) op ROW(...) compares field by field (9.25.5). Postgres decides it on the
-        syntax: a cast row, a row inside a row comparison or an ARRAY element is a composite value
-        and compares with record_eq / record_lt (9.25.6), which are strict on the whole value only.
+        comparison of values (9.25.6): NULL if either whole value is NULL; composites compare
+        with record_eq / record_lt, where NULL fields compare equal.
+        Operands are already evaluated, so callers evaluate each one once.
         """
-        match l, r:
-            case Tuple(), Tuple() if rows:
-                return self._row_compare(op, l, r)
-
-            case _ if op in (exp.EQ, exp.NEQ):
-                known = ~l.null & ~r.null
-                equal = self._equal(l, r, left, right)
-                t = equal if op is exp.EQ else ~equal
-                return known & t, known & ~t
-
-            case _:
-                known = ~l.null & ~r.null
-                holds = self.notebook.compare(op, left, right)
-                return known & holds, known & ~holds
-
-    def _row_compare(
-        self, op: type[Comparison], l: Tuple, r: Tuple, lv: Sequence[Value] | None = None
-    ) -> PredicateFormula:
-        """
-        ROW(...) op ROW(...) (9.25.5): = holds if every pair is equal, fails if one pair differs;
-        <> dually; <, <=, >, >= are decided by the first pair that is unequal or NULL.
-        Pairs that are rows themselves compare as composite values.
-        lv: the left fields already evaluated (an IN list compares one left row to several)
-        """
-        ctx = self.ctx
-        lv = [self._value(k) for k in l.keys] if lv is None else lv
-        rv = [self._value(k) for k in r.keys]
-        pairs = list(zip(lv, rv, l.keys, r.keys, strict=True))
-        eq = [self._compare_values(exp.EQ, a, b, x, y, rows=False) for a, b, x, y in pairs]
-
-        match op:
-            case exp.EQ:
-                return ctx.all(t for t, _ in eq), ctx.any(f for _, f in eq)
-            case exp.NEQ:
-                return ctx.any(f for _, f in eq), ctx.all(t for t, _ in eq)
-
-        strict = exp.LT if op in (exp.LT, exp.LTE) else exp.GT
-        true = false = ctx.false
-        equal_so_far = ctx.true
-        for (a, b, x, y), (eq_t, eq_f) in zip(pairs, eq):
-            holds, fails = self._compare_values(strict, a, b, x, y, rows=False)
-            true |= equal_so_far & eq_f & holds
-            false |= equal_so_far & eq_f & fails
-            equal_so_far &= eq_t
-        if op in (exp.LTE, exp.GTE):
-            true |= equal_so_far
+        if op in (exp.EQ, exp.NEQ):
+            eq = self._equal(l, r, left, right)
+            holds = eq if op is exp.EQ else ~eq
         else:
-            false |= equal_so_far
-        return true, false
+            holds = self.notebook.compare(op, left, right)
+        return Pred.of(holds=holds, known=~l.null & ~r.null)
 
     def _equal(self, l, r, left: exp.Expr, right: exp.Expr) -> Formula:
         """equality of two non-NULL values; NULL fields compare equal"""
@@ -371,9 +270,47 @@ class Evaluator:
             case _:
                 return self.notebook.compare(exp.EQ, left, right)
 
-    def _not_distinct(self, left, right):
+    def _row_compare(
+        self, op: type[Comparison], l: Tuple, r: Tuple, lv: Sequence[Value] | None = None
+    ) -> Pred:
+        """
+        ROW(...) op ROW(...) (9.25.5): = holds if every pair is equal, fails if one pair differs;
+        <> dually; <, <=, >, >= are decided by the first pair that is unequal or NULL.
+        Pairs compare as values (a nested row is a composite value).
+        lv: the left fields already evaluated (an IN list compares one left row to several)
+        """
+        ctx = self.ctx
+        lv = [self._value(k) for k in l.keys] if lv is None else lv
+        rv = [self._value(k) for k in r.keys]
+        pairs = list(zip(lv, rv, l.keys, r.keys, strict=True))
+        eq = [self._compare_values(exp.EQ, a, b, x, y) for a, b, x, y in pairs]
+
+        match op:
+            case exp.EQ:
+                return self._all(eq)
+            case exp.NEQ:
+                return ~self._all(eq)
+
+        strict = exp.LT if op in (exp.LT, exp.LTE) else exp.GT
+        true = false = ctx.false
+        equal_so_far = ctx.true
+        for (a, b, x, y), (eq_t, eq_f) in zip(pairs, eq):
+            holds, fails = self._compare_values(strict, a, b, x, y)
+            true |= equal_so_far & eq_f & holds
+            false |= equal_so_far & eq_f & fails
+            equal_so_far &= eq_t
+        if op in (exp.LTE, exp.GTE):
+            true |= equal_so_far
+        else:
+            false |= equal_so_far
+        return Pred(true, false)
+
+    def _not_distinct(self, left, right) -> Formula:
         l, r = self._value(left), self._value(right)
         return self._same_null(l.null, r.null, self._equal(l, r, left, right))
+
+    def _same_null(self, l_null: Formula, r_null: Formula, equal: Formula) -> Formula:
+        return (l_null & r_null) | (~l_null & ~r_null & equal)
 
     def _quantified(
         self,
@@ -381,7 +318,7 @@ class Evaluator:
         left: exp.Expr,
         quantifier: Literal["any", "all"],
         inner: exp.Expr,
-    ) -> PredicateFormula:
+    ) -> Pred:
         """
         left op ANY | ALL (array | subquery), SOME is ANY (9.24.3-4, 9.25.3-4).
         - ARRAY[...] is expanded, one comparison per element; rows compare as composite values.
@@ -396,13 +333,8 @@ class Evaluator:
                 isinstance(i, (exp.Query, exp.Array)) for i in items
             ):
                 l = self._value(left)
-                preds = [
-                    self._compare_values(op, l, self._value(i), left, i, rows=False) for i in items
-                ]
-                ts, fs = [t for t, _ in preds], [f for _, f in preds]
-                if quantifier == "any":
-                    return ctx.any(ts), ctx.all(fs)
-                return ctx.all(ts), ctx.any(fs)
+                preds = [self._compare_values(op, l, self._value(i), left, i) for i in items]
+                return self._any(preds) if quantifier == "any" else self._all(preds)
 
             case exp.Subquery() | exp.Select() | exp.SetOperation():
                 while isinstance(inner, exp.Subquery):
@@ -420,16 +352,16 @@ class Evaluator:
                     op, quantifier, [self._value(left).null], ctx.fresh(Kind.EMPTY), True
                 )
                 array_null = ctx.false if isinstance(inner, exp.Array) else self.null(inner)
-                return ~array_null & t, ~array_null & f
+                return Pred(~array_null & t, ~array_null & f)
 
     def _summarized(
         self,
         op: type[Comparison],
         quantifier: Literal["any", "all"],
-        lnulls: Sequence[NullFormula],
+        lnulls: Sequence[Formula],
         empty: Formula,
         can_null: bool,
-    ) -> PredicateFormula:
+    ) -> Pred:
         """
         ANY / ALL over elements (or subquery rows) we can't see one by one. Each comparison is
         true, false or NULL; which one stays open (fresh atoms) but its NULL-ness is exact:
@@ -458,9 +390,9 @@ class Evaluator:
         else:
             false = ~empty & can_false & some_false
             true = empty | (~some_false & can_true & (never_null | some_true))
-        return true, false
+        return Pred(true, false)
 
-    def _in(self, e: exp.In) -> PredicateFormula:
+    def _in(self, e: exp.In) -> Pred:
         """
         x IN (a, b) is x = a OR x = b; x IN (subquery) is x = ANY (subquery) (9.24.2, 9.25.1).
         Unlike `=`, an IN list sees a cast row as a row constructor:
@@ -470,7 +402,7 @@ class Evaluator:
         if (query := e.args.get("query")) is not None:
             return self._quantified(exp.EQ, left, "any", query)
         if not e.expressions:  # IN UNNEST(...) and other non-Postgres forms
-            return self._fresh_pred()
+            return Pred.fresh(ctx)
 
         if (lrow := self._row_constructor(left)) is not None:
             l = self._value(lrow)
@@ -479,16 +411,17 @@ class Evaluator:
             preds = []
             for item in e.expressions:
                 if (rrow := self._row_constructor(item)) is None:
-                    preds.append(self._fresh_pred())  # Postgres rejects a non-row in a row IN
+                    preds.append(Pred.fresh(ctx))  # Postgres rejects a non-row in a row IN
                 else:
                     preds.append(self._row_compare(exp.EQ, l, self._value(rrow), lv))  # type: ignore[arg-type]
         else:
+            # left is not a row constructor even under casts, so it can't be a Tuple
             l = self._value(left)
             preds = [
                 self._compare_values(exp.EQ, l, self._value(i), left, i) for i in e.expressions
             ]
 
-        return ctx.any(t for t, _ in preds), ctx.all(f for _, f in preds)
+        return self._any(preds)
 
     def _row_constructor(self, e: exp.Expr) -> exp.Expr | None:
         """ROW(...), possibly under casts: what Postgres resolves to a row constructor"""
@@ -497,50 +430,42 @@ class Evaluator:
             e = e.this.unnest()
         return e if is_row(e) else None
 
-    def _is(self, e: exp.Is) -> PredicateFormula:
+    def _is(self, e: exp.Is) -> Pred:
         left, right, negate = e.this, e.expression, bool(e.args.get("negate"))
 
         match right:
             case exp.Null():
                 match self._value(left):
                     case Item(null=null, fields=fields) | Tuple(null=null, fields=fields):
-                        true = (
-                            null | self.ctx.all(fields)
+                        return (
+                            Pred.of(holds=null | self.ctx.all(fields))
                             if not negate
-                            else ~null & self.ctx.all(~f for f in fields)
+                            else Pred.of(holds=~null & self.ctx.all(~f for f in fields))
                         )
-                        return true, ~true
 
                     case Scalar(null=null):
-                        return (null, ~null) if not negate else (~null, null)
+                        p = Pred.of(holds=null)
+                        return p if not negate else ~p
 
-                    case Opaque(null=null, shape=shape):
-                        all_non_null, all_null = self._may_composite(left, shape)
+                    case Opaque(null=null, all_null=all_null, all_non_null=all_non_null):
                         true = ~null & all_non_null if negate else null | all_null
-                        return true, ~true
+                        return Pred.of(holds=true)
 
-            case exp.Boolean(this=value):
+            case exp.Boolean(this=truth):
                 t, f = self.pred(left)
-                true = t if value else f
-                return (true, ~true) if not negate else (~true, true)
+                p = Pred.of(holds=t if truth else f)
+                return ~p if negate else p
 
             case _:
-                return self._fresh_pred()
+                return Pred.fresh(self.ctx)
 
-    def _same_null(self, l_null: NullFormula, r_null: NullFormula, equal: Formula) -> Formula:
-        return (l_null & r_null) | (~l_null & ~r_null & equal)
-
-    def _between(self, e: exp.Between) -> PredicateFormula:
+    def _between(self, e: exp.Between) -> Pred:
         x, low, high = e.this, e.args["low"], e.args["high"]
         xv, lv, hv = self._value(x), self._value(low), self._value(high)  # each evaluated once
-        (t1, f1) = self._compare_values(exp.GTE, xv, lv, x, low)
-        (t2, f2) = self._compare_values(exp.LTE, xv, hv, x, high)
-        true, false = t1 & t2, f1 | f2
+        p = self._compare(exp.GTE, xv, lv, x, low) & self._compare(exp.LTE, xv, hv, x, high)
         if e.args.get("symmetric"):
-            (t3, f3) = self._compare_values(exp.GTE, xv, hv, x, high)
-            (t4, f4) = self._compare_values(exp.LTE, xv, lv, x, low)
-            true, false = true | (t3 & t4), false & (f3 | f4)
-        return true, false
+            p |= self._compare(exp.GTE, xv, hv, x, high) & self._compare(exp.LTE, xv, lv, x, low)
+        return p
 
     def _case(self, expr: exp.Case) -> list[tuple[Formula, exp.Expr]]:
         """
@@ -554,15 +479,13 @@ class Evaluator:
             if this is None or xv is None:
                 t, _ = self.pred(i.this)
             else:
-                t, _ = self._compare_values(
-                    exp.EQ, xv, self._value(i.this), this, i.this, rows=False
-                )
+                t, _ = self._compare_values(exp.EQ, xv, self._value(i.this), this, i.this)
             paths.append((none_taken & t, i.args["true"]))
             none_taken &= ~t
         paths.append((none_taken, expr.args.get("default") or exp.Null()))
         return paths
 
-    def _coalesce(self, items: list[exp.Expr]) -> PredicateFormula:
+    def _coalesce(self, items: list[exp.Expr]) -> Pred:
         """coalesce as predicate"""
         ctx = self.ctx
         true = false = ctx.false
@@ -572,7 +495,7 @@ class Evaluator:
             true |= pending & t
             false |= pending & f
             pending &= ~t & ~f
-        return true, false
+        return Pred(true, false)
 
     def _func(self, e: exp.Func):
         return self.ctx.fresh(Kind.MAYBE)

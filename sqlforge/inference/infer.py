@@ -9,7 +9,7 @@ from sqlglot.errors import SqlglotError
 from sqlglot.optimizer import Scope
 
 from . import transfer as t
-from .catalog import Catalog, Oid, PGKey, Shape, Table, View
+from .catalog import Catalog, PGKey, Table, View
 from .context import Context, Formula, Kind
 from .evaluation import Env, Notebook
 from .evaluation.syntax import is_join_group, is_plain_aggregate
@@ -26,6 +26,7 @@ class ScopedAnalyzer:
         self.scope = scope
         self.outer = outer
         self.ctx = analyzer.ctx
+        self.catalog = analyzer.catalog
         self.side: list[Formula] = []
         self.notebook: Notebook = Notebook(self.ctx)
 
@@ -138,7 +139,7 @@ class ScopedAnalyzer:
             ctx=self.ctx,
             columns=[e.alias_or_name for e in select.selects],
             nulls=[ev.null(e) for e in select.selects],
-            types=[ev.type_oid(e) for e in select.selects],
+            types=[ev.type_of(e) for e in select.selects],
             invariant=row.invariant & self.ctx.all(self.side),
         )
 
@@ -175,9 +176,6 @@ class ScopedAnalyzer:
 
             case _:
                 raise Unsupported(f"source {type(node).__name__}")
-
-    def shape(self, oid: Oid) -> Shape:
-        return self.analyzer.catalog.shape(oid)
 
 
 class Analyzer:

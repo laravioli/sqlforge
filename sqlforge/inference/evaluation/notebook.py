@@ -68,7 +68,7 @@ class Notebook:
 
     def holds(self, tag: str, *operands: exp.Expr):
         """
-        boolean fact
+        2-valued boolean fact
         """
         if not all(self._reusable(o) for o in operands):
             return self.ctx.fresh(Kind.TRUTH)

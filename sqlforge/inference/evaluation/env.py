@@ -6,13 +6,14 @@ from typing import Protocol
 
 from sqlglot import exp
 
-from sqlforge.inference.catalog import Oid, Shape
+from sqlforge.inference.catalog import Catalog
 from sqlforge.inference.context import Context, Formula
 from sqlforge.inference.exception import UnknownColumn
 from sqlforge.inference.relation import Alias, ColKey, ColType, Item, Row, Subquery
 
 from .evaluator import Evaluator
 from .notebook import Notebook
+from .type_evaluator import TypeEvaluator
 
 type PredicateFormula = tuple[Formula, Formula]
 type NullFormula = Formula
@@ -20,11 +21,11 @@ type NullFormula = Formula
 
 class ScopeProtocol(Protocol):
     ctx: Context
+    catalog: Catalog
     side: list[Formula]
     notebook: Notebook
 
     def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery: ...
-    def shape(self, oid: Oid) -> Shape: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +39,7 @@ class Env:
     outer: Env | None
 
     def evaluator(self):
-        return Evaluator(self)
+        return Evaluator(self, TypeEvaluator(self, self.scope.catalog))
 
     def bind(self, *rows: Row) -> Env:
         return replace(
@@ -70,12 +71,13 @@ class Env:
         return self.item(alias).padded
 
     def null_of(self, key: ColKey) -> Formula:
+        """nullability of (alias,col) from current row"""
         try:
             return self.item(key[0]).null_of(key[1])
         except KeyError:
             raise UnknownColumn(key)
 
-    def type_oid(self, key: ColKey) -> ColType:
+    def col_oid(self, key: ColKey) -> ColType:
         """oid from one row column or unknown (cte, derived table)"""
         try:
             return self.item(key[0]).type_of(key[1])
