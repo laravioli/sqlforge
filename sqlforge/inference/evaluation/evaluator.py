@@ -23,7 +23,7 @@ from .syntax import (
     is_strict_binary_operator,
     quantifier,
 )
-from .type_evaluator import TypeEvaluator
+from .types import TypeEval
 
 if TYPE_CHECKING:
     from .env import Env
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True, slots=True)
 class Evaluator:
     env: Env
-    types: TypeEvaluator
+    types: TypeEval
 
     @property
     def ctx(self):

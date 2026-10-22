@@ -14,7 +14,7 @@ def cast_extract(e: exp.Cast) -> PGKey:
     return PGKey((None, ""))
 
 
-class TypeEvaluator:
+class TypeEval:
     def __init__(self, env: Env, catalog: Catalog):
         self.env = env
         self.catalog = catalog

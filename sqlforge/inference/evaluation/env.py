@@ -13,7 +13,7 @@ from sqlforge.inference.relation import Alias, ColKey, ColType, Item, Row, Subqu
 
 from .evaluator import Evaluator
 from .notebook import Notebook
-from .type_evaluator import TypeEvaluator
+from .types import TypeEval
 
 type PredicateFormula = tuple[Formula, Formula]
 type NullFormula = Formula
@@ -39,7 +39,7 @@ class Env:
     outer: Env | None
 
     def evaluator(self):
-        return Evaluator(self, TypeEvaluator(self, self.scope.catalog))
+        return Evaluator(self, TypeEval(self, self.scope.catalog))
 
     def bind(self, *rows: Row) -> Env:
         return replace(
