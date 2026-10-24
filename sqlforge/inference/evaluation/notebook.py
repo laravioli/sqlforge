@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from sqlglot import exp
 
 from sqlforge.inference.context import Context, Formula, Kind
 
 from .syntax import Comparison
+
+# holds
+ALL_NULL = "all_null"
+ALL_SET = "all_set"
+PRED = "pred"
+
+type HoldFact = Literal["all_null", "all_set", "pred"]
+
+# null
+CONCAT = "||"
+DOTTED_FIELD = "dot_field"
+UNKNOWN = "unknown"
+
+type NullFact = Literal["||", "dot_field", "unknown"]
+
+# compare
+_EQ = "eq"
+_LT = "lt"
 
 
 @dataclass
@@ -61,26 +80,26 @@ class Notebook:
             return self.ctx.false, self.ctx.true, self.ctx.false
 
         first, second = sorted((left, right), key=hash)
-        equal = self._var(("eq", first, second), Kind.TRUTH)
-        below = self._var(("lt", first, second), Kind.TRUTH)
+        equal = self._var((_EQ, first, second), Kind.TRUTH)
+        below = self._var((_LT, first, second), Kind.TRUTH)
         less, greater = ~equal & below, ~equal & ~below
         return (less, equal, greater) if first == left else (greater, equal, less)
 
-    def holds(self, tag: str, *operands: exp.Expr):
+    def holds(self, tag: HoldFact, *operands: exp.Expr):
         """
         2-valued boolean fact
         """
         if not all(self._reusable(o) for o in operands):
             return self.ctx.fresh(Kind.TRUTH)
-        return self._var((f"{tag}_h", *operands), Kind.TRUTH)
+        return self._var((tag, *operands), Kind.TRUTH)
 
-    def null(self, tag: str, expr: exp.Expr):
+    def null(self, tag: NullFact, expr: exp.Expr):
         """
         null fact
         """
         if not self._reusable(expr):
             return self.ctx.fresh(Kind.MAYBE)
-        return self._var((f"{tag}_n", expr), Kind.MAYBE)
+        return self._var((tag, expr), Kind.MAYBE)
 
     def _reusable(self, expr: exp.Expr):
         """whitelist that allow storing a fact"""

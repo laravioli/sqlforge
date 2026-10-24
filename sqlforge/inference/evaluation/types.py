@@ -4,14 +4,10 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlglot import exp
 
-from sqlforge.inference.catalog import Catalog, Composite, PGKey, Shape
+from sqlforge.inference.catalog import Catalog, Composite, Shape
 
 if TYPE_CHECKING:
     from .env import Env
-
-
-def cast_extract(e: exp.Cast) -> PGKey:
-    return PGKey((None, ""))
 
 
 class TypeEval:
@@ -27,10 +23,6 @@ class TypeEval:
 
             case exp.Column(table=alias, name=col):
                 return self.env.col_oid((alias, col))
-
-            case exp.Cast():
-                pg_type = self.catalog.pg_type(cast_extract(e))
-                return pg_type.oid if pg_type is not None else "unknown"
 
             case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
                 return self.env.col_oid((row.name, field.name))

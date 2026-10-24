@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
 from sqlglot import exp
 
 from sqlforge.inference.catalog import Composite
 from sqlforge.inference.context import Context, Formula, Kind
-from sqlforge.inference.relation import Item
 
 type NullFormula = Formula
 type PredicateFormula = tuple[Formula, Formula]
@@ -38,10 +37,17 @@ class Pred(NamedTuple):
     def as_null(self):
         return ~self.t & ~self.f
 
+    def when(self, cond: Formula):
+        return Pred(cond & self.t, cond & self.f)
+
     @staticmethod
-    def of(*, holds: Formula, known: Formula | None = None) -> Pred:
-        """two-valued if known is None, else NULL when not known"""
-        return Pred(holds, ~holds) if known is None else Pred(known & holds, known & ~holds)
+    def binary(true: Formula):
+        return Pred(true, ~true)
+
+    @staticmethod
+    def known(holds: Formula, known: Formula) -> Pred:
+        """the result is unknown if known is false else the result is bool(holds)"""
+        return Pred(known & holds, known & ~holds)
 
     @staticmethod
     def fresh(ctx: Context) -> Pred:
@@ -52,17 +58,26 @@ class Pred(NamedTuple):
 @dataclass(frozen=True)
 class Scalar:
     null: Formula
+    key: exp.Expr
+
+
+@dataclass(frozen=True, slots=True)
+class KeyedItem:
+    null: Formula
+    fields: Sequence[Formula]
+    key: exp.Expr
 
 
 @dataclass(frozen=True, slots=True)
 class Tuple:
     null: Formula  # ctx.false
-    keys: Sequence[exp.Expr]
-    _null_of: Callable[[exp.Expr], Formula] = field(repr=False, compare=False)
+    args: Sequence[exp.Expr]
+    _null_of: Callable[[exp.Expr], Formula]
+    key: exp.Expr
 
     @property
     def fields(self) -> Sequence[Formula]:
-        return [self._null_of(k) for k in self.keys]
+        return [self._null_of(k) for k in self.args]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,12 +85,8 @@ class Opaque:
     """a composite whose fields are unknown: column, function, Dot, CASE... or an unknown value"""
 
     null: Formula
-    all_null: Formula
-    all_non_null: Formula
-    shape: Composite | Literal["unknown"]  # field names and oids when the catalog knows them
-
-    def field_null(self, atom: Formula) -> Formula:
-        return self.null | (~self.all_non_null & (self.all_null | atom))
+    shape: Composite | Literal["unknown"]
+    key: exp.Expr
 
 
-type Value = Scalar | Item | Tuple | Opaque
+type Value = Scalar | KeyedItem | Tuple | Opaque

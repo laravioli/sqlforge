@@ -6,8 +6,6 @@ from typing import Literal, TypeIs
 from sqlglot import exp
 from sqlglot.optimizer.simplify import extract_date
 
-from sqlforge.inference.catalog import PGKey
-
 BOOLEAN_EXPRESSIONS = (exp.Predicate, exp.Connector, exp.Boolean, exp.Not, exp.Escape)
 COMPARISON_PREDICATES = (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)
 STRICT_BINARY_PREDICATES = (
@@ -117,6 +115,15 @@ def is_row(expression: exp.Expr) -> bool:
     )
 
 
+def is_cast_row(e: exp.Expr) -> bool:
+    e = e.unnest()
+    if not isinstance(e, exp.Cast):
+        return False
+    while isinstance(e, exp.Cast):
+        e = e.this.unnest()
+    return is_row(e)
+
+
 def is_scalar(
     expression: exp.Expr,
 ) -> bool:  # TODO: add a map scalar function (introspection) <-> expression
@@ -179,7 +186,3 @@ def quantifier(e: exp.Expr) -> tuple[Literal["any", "all"], exp.Expr] | None:
         case exp.Anonymous() if e.name.upper() == "SOME" and len(e.expressions) == 1:  # SOME is ANY
             return "any", (e.expressions[0]).unnest()
     return None
-
-
-def cast_extract(e: exp.Cast) -> PGKey:
-    return PGKey((None, ""))
