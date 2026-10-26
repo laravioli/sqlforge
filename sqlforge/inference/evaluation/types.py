@@ -24,7 +24,9 @@ class TypeEval:
             case exp.Column(table=alias, name=col):
                 return self.env.col_oid((alias, col))
 
-            case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
+            case exp.Dot(
+                this=exp.TableColumn() as row, expression=field
+            ):  # (t).f is t.f
                 return self.env.col_oid((row.name, field.name))
 
             case exp.Dot(this=base, expression=field):

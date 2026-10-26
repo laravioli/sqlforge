@@ -52,7 +52,9 @@ def sources(register: PGTypeRegister) -> Generator[Table | View]:
     for t in composite_types(register):
         columns = {c.name: c for c in t.attributes}
         match t:
-            case CompositeType(comp_kind=CompositeKind.TABLE | CompositeKind.PARTITIONED_TABLE):
+            case CompositeType(
+                comp_kind=CompositeKind.TABLE | CompositeKind.PARTITIONED_TABLE
+            ):
                 yield Table(t.ns, t.name, columns)
 
             case CompositeType(comp_kind=CompositeKind.FOREIGN_TABLE):
@@ -72,11 +74,16 @@ class SearchPathSchema(MappingSchema):
         self.search_path = tuple(search_path)
 
     def find(
-        self, table: exp.Table, raise_on_missing: bool = True, ensure_data_types: bool = False
+        self,
+        table: exp.Table,
+        raise_on_missing: bool = True,
+        ensure_data_types: bool = False,
     ) -> Any | None:
         if not table.db:
             for ns in self.search_path:
-                found = super().find(exp.table_(table.name, db=ns), False, ensure_data_types)
+                found = super().find(
+                    exp.table_(table.name, db=ns), False, ensure_data_types
+                )
                 if found is not None:
                     return found
         return super().find(table, raise_on_missing, ensure_data_types)
@@ -101,7 +108,8 @@ def mapping_schema(
                     this=DataType.Type.STRUCT,
                     expressions=[
                         exp.ColumnDef(
-                            this=exp.to_identifier(a.name), kind=sqlglot_type(a.attr_type, register)
+                            this=exp.to_identifier(a.name),
+                            kind=sqlglot_type(a.attr_type, register),
                         )
                         for a in attrs
                     ],
@@ -117,5 +125,7 @@ def mapping_schema(
 
     mapping: dict[str, dict[str, dict[str, DataType]]] = {}
     for rel in sources(register):
-        mapping.setdefault(rel.ns, {})[rel.name] = {k: column(v) for k, v in rel.columns.items()}
+        mapping.setdefault(rel.ns, {})[rel.name] = {
+            k: column(v) for k, v in rel.columns.items()
+        }
     return SearchPathSchema(mapping, search_path)

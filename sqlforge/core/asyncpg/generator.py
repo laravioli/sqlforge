@@ -37,7 +37,9 @@ class APGFnGenerator:
     def _fn_writer(self):
         for sql in self.sqls:
             txt = (
-                Text(f'{sql.source.name.upper()} : typing.Final[str] = """{sql.source!s}"""')
+                Text(
+                    f'{sql.source.name.upper()} : typing.Final[str] = """{sql.source!s}"""'
+                )
                 .newline()
                 .newline()
             )
@@ -60,7 +62,9 @@ class APGFnGenerator:
     def _build_fn_params(self, sql: AnalyzedSQL, *, many=False, record_class=True):
         params = FnParamText("conn", "asyncpg.Connection")
         if many:
-            params.add_param("args", f"Iterable[{_row(sql.typed_params.values())}]").asterix()
+            params.add_param(
+                "args", f"Iterable[{_row(sql.typed_params.values())}]"
+            ).asterix()
         else:
             for name, type_ in sql.typed_params.items():
                 params.add_param(name, type_)
@@ -91,7 +95,9 @@ class APGFnGenerator:
         """
 
         params = self._build_fn_params(sql)
-        body = BodyText(_call("fetchrow", sql, "timeout=timeout", "record_class=record_class"))
+        body = BodyText(
+            _call("fetchrow", sql, "timeout=timeout", "record_class=record_class")
+        )
         return_ = FnReturnText().add(f"{_row(t[1] for t in sql.typed_attrs)} | None")
         return FnText(sql.source.name.lower(), params, body, return_).gen()
 
@@ -114,7 +120,9 @@ class APGFnGenerator:
             actual type of list elements would be *record_class*.
         """
         params = self._build_fn_params(sql)
-        body = BodyText(_call("fetch", sql, "timeout=timeout", "record_class=record_class"))
+        body = BodyText(
+            _call("fetch", sql, "timeout=timeout", "record_class=record_class")
+        )
         return_ = FnReturnText().add(f"list[{_row(t[1] for t in sql.typed_attrs)}]")
         return FnText(sql.name.lower(), params, body, return_).gen()
 

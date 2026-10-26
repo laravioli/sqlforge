@@ -6,7 +6,7 @@ from asyncpg import Connection
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import exp
 
-from sqlforge.core.loader import load
+from sqlforge.core.queries import load_queries
 from sqlforge.core.structures import (
     SQL,
     Config,
@@ -34,7 +34,7 @@ class AsyncPGRecipe(Recipe):
     # Main
 
     async def pipeline(self):
-        inputs = load(self.config, self.info)
+        inputs = load_queries(self.config, self.info)
         queries = self._transform(inputs)
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
@@ -70,7 +70,9 @@ class AsyncPGRecipe(Recipe):
             for sql in sqls
         ]
 
-    def _convert(self, sqls: list[PreparedSQL], reg: PythonTypeRegister) -> list[TypedSQL]:
+    def _convert(
+        self, sqls: list[PreparedSQL], reg: PythonTypeRegister
+    ) -> list[TypedSQL]:
         return [_convert_one(sql, reg) for sql in sqls]
 
     # Utils

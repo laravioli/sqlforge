@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, NewType
 
-from sqlforge.introspection.catalog import DEFAULT_SEARCH_PATH, Table, View, mapping_schema, sources
+from sqlforge.introspection.catalog import (
+    DEFAULT_SEARCH_PATH,
+    Table,
+    View,
+    mapping_schema,
+    sources,
+)
 from sqlforge.introspection.structures import (
     CompositeType,
     DomainType,
@@ -21,7 +27,9 @@ type Fields = tuple[tuple[str, Oid], ...]
 
 class Catalog:
     def __init__(self, type_register: PGTypeRegister, search_path=DEFAULT_SEARCH_PATH):
-        self.search_path: tuple[str, ...] = search_path  # TODO: would need an override in config
+        self.search_path: tuple[str, ...] = (
+            search_path  # TODO: would need an override in config
+        )
         self.views = ViewStore()
         self.mapping_schema = mapping_schema(type_register, search_path)
 
@@ -33,7 +41,9 @@ class Catalog:
             (s.ns, s.name): s for s in sources(type_register)
         }
 
-    def _resolve[T](self, types: dict[tuple[str, str], T], ns: str | None, typ: str) -> T | None:
+    def _resolve[T](
+        self, types: dict[tuple[str, str], T], ns: str | None, typ: str
+    ) -> T | None:
         spaces = (ns,) if ns else self.search_path
         return next((t for s in spaces if (t := types.get((s, typ))) is not None), None)
 

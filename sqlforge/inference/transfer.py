@@ -29,7 +29,10 @@ def union(left: Relation, right: Relation) -> Relation:
     return Relation(
         ctx=left.ctx,
         columns=left.columns,
-        nulls=[(side & l) | (~side & r) for l, r in zip(left.nulls, right.nulls, strict=True)],
+        nulls=[
+            (side & l) | (~side & r)
+            for l, r in zip(left.nulls, right.nulls, strict=True)
+        ],
         types=left.types,
         invariant=(side.implies(left.invariant) & (~side).implies(right.invariant)),
     )
@@ -79,11 +82,15 @@ def cross(left: Row, right: Row) -> Row:
 
 
 def _pad(row: Row, real: Formula) -> Row:
-    return Row({a: i.pad(real) for a, i in row.items.items()}, real.implies(row.invariant))
+    return Row(
+        {a: i.pad(real) for a, i in row.items.items()}, real.implies(row.invariant)
+    )
 
 
 def join(ctx: Context, expr: exp.Join, left: Row, right: Row, on: Formula) -> Row:
     kind = JoinKind.from_expr(expr)
     ml = ctx.fresh(Kind.MATCH) if kind in (JoinKind.RIGHT, JoinKind.FULL) else ctx.true
     mr = ctx.fresh(Kind.MATCH) if kind in (JoinKind.LEFT, JoinKind.FULL) else ctx.true
-    return filter_(cross(_pad(left, ml), _pad(right, mr)), (ml | mr) & (ml & mr).implies(on))
+    return filter_(
+        cross(_pad(left, ml), _pad(right, mr)), (ml | mr) & (ml & mr).implies(on)
+    )

@@ -49,10 +49,14 @@ class Relation:
 
     def compress(self):
         hidden = {
-            v for v in (self.invariant.support - support(self.nulls)) if not self.ctx.is_global(v)
+            v
+            for v in (self.invariant.support - support(self.nulls))
+            if not self.ctx.is_global(v)
         }
         return (
-            replace(self, invariant=self.ctx.bdd.exist(hidden, self.invariant)) if hidden else self
+            replace(self, invariant=self.ctx.bdd.exist(hidden, self.invariant))
+            if hidden
+            else self
         )
 
     def row(self, alias: str):
@@ -129,7 +133,9 @@ class Item:
 
     def pad(self, real: Formula) -> Item:
         return replace(
-            self, fields=[real.implies(n) for n in self.fields], padded=real.implies(self.padded)
+            self,
+            fields=[real.implies(n) for n in self.fields],
+            padded=real.implies(self.padded),
         )
 
 

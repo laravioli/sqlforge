@@ -54,20 +54,34 @@ class Engine:
 
             nulls = Analyzer(Context(), self.catalog).run(scope).result()
             if len(attrs) != len(nulls):
-                raise Unsupported(f"{len(nulls)} columns inferred, {len(attrs)} expected")
+                raise Unsupported(
+                    f"{len(nulls)} columns inferred, {len(attrs)} expected"
+                )
 
         except (SqlglotError, Unsupported) as e:
-            nulls, bypassed, error = [MAYBE_NULL] * len(attrs), isinstance(e, ByPassed), str(e)
+            nulls, bypassed, error = (
+                [MAYBE_NULL] * len(attrs),
+                isinstance(e, ByPassed),
+                str(e),
+            )
 
         except Exception as e:  # bug
             logger.warning(
-                "inference failed on %s, all columns may be NULL", statement.name, exc_info=e
+                "inference failed on %s, all columns may be NULL",
+                statement.name,
+                exc_info=e,
             )
-            nulls, bypassed, error, internal = [MAYBE_NULL] * len(attrs), False, repr(e), True
+            nulls, bypassed, error, internal = (
+                [MAYBE_NULL] * len(attrs),
+                False,
+                repr(e),
+                True,
+            )
 
         return Analysis(
             columns=tuple(
-                ColumnResult(name, type_, null) for (name, type_), null in zip(attrs, nulls)
+                ColumnResult(name, type_, null)
+                for (name, type_), null in zip(attrs, nulls)
             ),
             bypassed=bypassed,
             error=error,

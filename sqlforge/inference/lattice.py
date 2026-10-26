@@ -20,9 +20,12 @@ class Nullability:
         return f"{base} | None" if self.may_null else base
 
     def __repr__(self) -> str:
-        return {(False, False): "⊥", (False, True): "NN", (True, False): "NUL", (True, True): "⊤"}[
-            (self.may_null, self.may_value)
-        ]
+        return {
+            (False, False): "⊥",
+            (False, True): "NN",
+            (True, False): "NUL",
+            (True, True): "⊤",
+        }[(self.may_null, self.may_value)]
 
 
 MAYBE_NULL = Nullability(True, True)

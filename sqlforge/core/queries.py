@@ -18,8 +18,17 @@ name
 META_PATTERN = re.compile(METADATA, re.VERBOSE)
 
 
+class QueryHandler:
+    """
+    Load queries and parse metadata, wrapping a query in a SQL object
+    """
+
+    def __init__(self, config: Config):
+        self.cong = Config
+
+
 # impl
-def load(config: Config, info: Info) -> list[SQL]:
+def load_queries(config: Config, info: Info) -> list[SQL]:
     with open(config.path, "r") as file:
         content = file.read()
         dialect = info["dialect"]

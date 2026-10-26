@@ -99,7 +99,9 @@ def is_strict_binary_predicate(expression: exp.Expr) -> TypeIs[StrictBinaryPredi
     return isinstance(expression, STRICT_BINARY_PREDICATES)
 
 
-def is_subquery_predicate(expression: exp.Expr) -> TypeIs[exp.Any | exp.All | exp.Exists | exp.In]:
+def is_subquery_predicate(
+    expression: exp.Expr,
+) -> TypeIs[exp.Any | exp.All | exp.Exists | exp.In]:
     return isinstance(expression, (exp.Any, exp.All, exp.Exists, exp.In))
 
 
@@ -140,10 +142,16 @@ def is_strict_binary_operator(e: exp.Expr) -> bool:
     return isinstance(e, STRICT_BINARY_OPERATORS)
 
 
-def is_plain_aggregate(select: exp.Select, aggregates: frozenset[str] | None = None) -> bool:
+def is_plain_aggregate(
+    select: exp.Select, aggregates: frozenset[str] | None = None
+) -> bool:
     group = select.args.get("group")
-    if group is not None:  # GROUP BY () is one group, any other GROUP BY one row per group
-        return all(isinstance(g, exp.Tuple) and not g.expressions for g in group.expressions)
+    if (
+        group is not None
+    ):  # GROUP BY () is one group, any other GROUP BY one row per group
+        return all(
+            isinstance(g, exp.Tuple) and not g.expressions for g in group.expressions
+        )
     if select.args.get("having"):
         return True
     clauses = (
@@ -154,7 +162,11 @@ def is_plain_aggregate(select: exp.Select, aggregates: frozenset[str] | None = N
     )
     return any(
         not _is_window_call(f)
-        and (isinstance(f, exp.AggFunc) or aggregates is None or f.name.lower() in aggregates)
+        and (
+            isinstance(f, exp.AggFunc)
+            or aggregates is None
+            or f.name.lower() in aggregates
+        )
         for clause in clauses
         if clause is not None
         for f in _own_calls(clause)
@@ -183,6 +195,8 @@ def quantifier(e: exp.Expr) -> tuple[Literal["any", "all"], exp.Expr] | None:
             return "all", inner.unnest()
         case exp.Anonymous() if e.name.upper() == "ALL" and len(e.expressions) == 1:
             return "all", (e.expressions[0]).unnest()
-        case exp.Anonymous() if e.name.upper() == "SOME" and len(e.expressions) == 1:  # SOME is ANY
+        case exp.Anonymous() if (
+            e.name.upper() == "SOME" and len(e.expressions) == 1
+        ):  # SOME is ANY
             return "any", (e.expressions[0]).unnest()
     return None

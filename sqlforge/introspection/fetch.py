@@ -59,7 +59,11 @@ class PgFetcher:
 
                 case TypeKind.COMPOSITE:
                     assert rec["comp_kind"] is not None
-                    attributes = ATTR_DECODER.decode(rec["attributes"]) if rec["attributes"] else []
+                    attributes = (
+                        ATTR_DECODER.decode(rec["attributes"])
+                        if rec["attributes"]
+                        else []
+                    )
                     comp_kind = rec["comp_kind"].decode()
 
                     if comp_kind in ["v", "m"]:

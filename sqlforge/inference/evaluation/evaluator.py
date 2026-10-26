@@ -63,7 +63,9 @@ class Evaluator:
                 return self.env.null(e.name)
 
             # NOTE: function will also use Dot
-            case exp.Dot(this=exp.TableColumn() as row, expression=field):  # (t).f is t.f
+            case exp.Dot(
+                this=exp.TableColumn() as row, expression=field
+            ):  # (t).f is t.f
                 return self.env.null_of((row.name, field.name))
 
             case exp.Dot(this=base):  # (composite).f
@@ -189,7 +191,9 @@ class Evaluator:
                 return Pred.binary(~sub.empty)
 
             case exp.Case():
-                return self._branches([(taken, self.pred(then)) for taken, then in self._case(e)])
+                return self._branches(
+                    [(taken, self.pred(then)) for taken, then in self._case(e)]
+                )
 
             case exp.Coalesce():
                 return self._coalesce([e.this, *e.expressions])
@@ -207,7 +211,9 @@ class Evaluator:
                 return Pred.known(
                     holds=self.notebook.holds(PRED, e),
                     known=(
-                        ~self.notebook.null(UNKNOWN, e) if is_boolean_expr(e) else ~self.null(e)
+                        ~self.notebook.null(UNKNOWN, e)
+                        if is_boolean_expr(e)
+                        else ~self.null(e)
                     ),
                 )
 
@@ -268,11 +274,14 @@ class Evaluator:
         """equality of two non-NULL values; NULL fields compare equal"""
         match l, r:
             case Tuple(args=lk), Tuple(args=rk):
-                return self.ctx.all(self._not_distinct(x, y) for x, y in zip(lk, rk, strict=True))
+                return self.ctx.all(
+                    self._not_distinct(x, y) for x, y in zip(lk, rk, strict=True)
+                )
 
             case Tuple() | KeyedItem(), Tuple() | KeyedItem():
                 same_nulls = self.ctx.all(
-                    (nl & nr) | (~nl & ~nr) for nl, nr in zip(l.fields, r.fields, strict=True)
+                    (nl & nr) | (~nl & ~nr)
+                    for nl, nr in zip(l.fields, r.fields, strict=True)
                 )
                 return same_nulls & self.notebook.compare(exp.EQ, l.key, r.key)
 
@@ -284,7 +293,11 @@ class Evaluator:
         return (l.null & r.null) | (~l.null & ~r.null & self._are_values_equal(l, r))
 
     def _compare_rows(
-        self, op: type[Comparison], l: Tuple, r: Tuple, lv: Sequence[Value] | None = None
+        self,
+        op: type[Comparison],
+        l: Tuple,
+        r: Tuple,
+        lv: Sequence[Value] | None = None,
     ) -> Pred:
         """
         row_constructor operator row_constructor (9.25.5)
@@ -315,7 +328,10 @@ class Evaluator:
             )  # first unequal pair decides
             equal_so_far &= eq_t
         paths.append(
-            (equal_so_far, Pred.binary(ctx.true if op in (exp.LTE, exp.GTE) else ctx.false))
+            (
+                equal_so_far,
+                Pred.binary(ctx.true if op in (exp.LTE, exp.GTE) else ctx.false),
+            )
         )
         return self._branches(paths)
 
@@ -351,15 +367,25 @@ class Evaluator:
                     return Pred.fresh(ctx)
                 can_null = any(ctx.sat(sub.relation.invariant & n) for n in sub.nulls)
                 match self._value(left):
-                    case Tuple(fields=fields):  # written ROW(...): one NULL-ness per field
+                    case Tuple(
+                        fields=fields
+                    ):  # written ROW(...): one NULL-ness per field
                         lnulls = fields
                     case l:
                         lnulls = [l.null]
-                return self._quantify_unseen(op, quantifier, lnulls, sub.empty, can_null)
+                return self._quantify_unseen(
+                    op, quantifier, lnulls, sub.empty, can_null
+                )
 
-            case _:  # an array value: its elements may be NULL, so the result may be NULL
+            case (
+                _
+            ):  # an array value: its elements may be NULL, so the result may be NULL
                 p = self._quantify_unseen(
-                    op, quantifier, [self._value(left).null], ctx.fresh(Kind.EMPTY), True
+                    op,
+                    quantifier,
+                    [self._value(left).null],
+                    ctx.fresh(Kind.EMPTY),
+                    True,
                 )
                 return p.when(~self.null(inner))
 
@@ -402,7 +428,9 @@ class Evaluator:
             return Pred.fresh(self.ctx)  # IN UNNEST(...) isn't Postgres, or a cast row
 
         l = self._value(left)
-        return self._any([self._compare(exp.EQ, l, self._value(i)) for i in e.expressions])
+        return self._any(
+            [self._compare(exp.EQ, l, self._value(i)) for i in e.expressions]
+        )
 
     def _is(self, e: exp.Is) -> Pred:
         left, right, negate = e.this, e.expression, bool(e.args.get("negate"))
@@ -410,7 +438,10 @@ class Evaluator:
         match right:
             case exp.Null():
                 match self._value(left):
-                    case KeyedItem(null=null, fields=fields) | Tuple(null=null, fields=fields):
+                    case (
+                        KeyedItem(null=null, fields=fields)
+                        | Tuple(null=null, fields=fields)
+                    ):
                         return Pred.binary(
                             null | self.ctx.all(fields)
                             if not negate
@@ -437,7 +468,11 @@ class Evaluator:
 
     def _between(self, e: exp.Between) -> Pred:
         x, low, high = e.this, e.args["low"], e.args["high"]
-        xv, lv, hv = self._value(x), self._value(low), self._value(high)  # each evaluated once
+        xv, lv, hv = (
+            self._value(x),
+            self._value(low),
+            self._value(high),
+        )  # each evaluated once
         p = self._compare(exp.GTE, xv, lv) & self._compare(exp.LTE, xv, hv)
         if e.args.get("symmetric"):
             p |= self._compare(exp.GTE, xv, hv) & self._compare(exp.LTE, xv, lv)

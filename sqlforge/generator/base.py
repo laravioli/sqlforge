@@ -70,7 +70,9 @@ class FnParamText(Text):
         self._string = f"({name}: {param_type}"
 
     def add_param(self, name: str, param_type: str, default: str | None = None):
-        self.add(f", {name.lower()}: {param_type}").add(f" = {default}" if default else "")
+        self.add(f", {name.lower()}: {param_type}").add(
+            f" = {default}" if default else ""
+        )
         return self
 
     def asterix(self):

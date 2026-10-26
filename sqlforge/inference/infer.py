@@ -36,7 +36,9 @@ class ScopedAnalyzer:
             case exp.Select():
                 relation = self.select()
             case exp.SetOperation() as node:
-                left, right = (self.child(s, self.outer) for s in scope.set_operation_scopes)
+                left, right = (
+                    self.child(s, self.outer) for s in scope.set_operation_scopes
+                )
                 relation = t.setop(node, left, right)
             case node:
                 raise Unsupported(f"scope {type(node).__name__}")
@@ -148,13 +150,17 @@ class ScopedAnalyzer:
         return {s.expression: s for s in self.scope.subquery_scopes}
 
     def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery:
-        return Subquery(self.child(self._subqueries[expr], env), self.ctx.fresh(Kind.EMPTY))
+        return Subquery(
+            self.child(self._subqueries[expr], env), self.ctx.fresh(Kind.EMPTY)
+        )
 
     @overload
     def source(self, node: exp.Table | exp.Subquery, outer: None = None) -> Row: ...
     @overload
     def source(self, node: exp.Lateral, outer: Env) -> Row: ...
-    def source(self, node: exp.Table | exp.Subquery | exp.Lateral, outer: Env | None = None) -> Row:
+    def source(
+        self, node: exp.Table | exp.Subquery | exp.Lateral, outer: Env | None = None
+    ) -> Row:
         alias = node.alias_or_name
         if alias not in self.scope.selected_sources:
             raise Unsupported(f"source {type(node).__name__} {alias!r}")
@@ -219,7 +225,9 @@ class Analyzer:
             ctx=self.ctx,
             columns=tuple(source.columns.keys()),
             nulls=[
-                self.ctx.fresh(Kind.BASE) if source.maybe_null(col.name) else self.ctx.false
+                self.ctx.fresh(Kind.BASE)
+                if source.maybe_null(col.name)
+                else self.ctx.false
                 for col in source.columns.values()
             ],
             types=[c.attr_type for c in source.columns.values()],

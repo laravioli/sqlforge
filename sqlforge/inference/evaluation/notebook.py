@@ -75,7 +75,9 @@ class Notebook:
             case _:
                 assert False
 
-    def _order(self, left: exp.Expr, right: exp.Expr) -> tuple[Formula, Formula, Formula]:
+    def _order(
+        self, left: exp.Expr, right: exp.Expr
+    ) -> tuple[Formula, Formula, Formula]:
         if left == right:
             return self.ctx.false, self.ctx.true, self.ctx.false
 

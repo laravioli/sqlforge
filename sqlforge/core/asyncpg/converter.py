@@ -32,9 +32,12 @@ ANY = "typing.Any"
 def type_name(t) -> str:
     match t:
         case type() if (
-            t.__module__.startswith("asyncpg") and getattr(asyncpg, t.__qualname__, None) is t
+            t.__module__.startswith("asyncpg")
+            and getattr(asyncpg, t.__qualname__, None) is t
         ):
-            return f"asyncpg.{t.__qualname__}"  # public name, not the internal module path
+            return (
+                f"asyncpg.{t.__qualname__}"  # public name, not the internal module path
+            )
 
         case type():
             module = t.__module__

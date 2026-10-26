@@ -36,7 +36,11 @@ def is_after_comparison(ast: exp.Expr) -> bool:
     # https://github.com/tobymao/sqlglot/issues/8661
     """`a = b IS NULL` is `(a = b) IS NULL` in Postgres, but sqlglot parses `a = (b IS NULL)`"""
     for cmp in ast.find_all(*COMPARISON_PREDICATES):
-        right = cmp.expression.this if isinstance(cmp.expression, exp.Not) else cmp.expression
+        right = (
+            cmp.expression.this
+            if isinstance(cmp.expression, exp.Not)
+            else cmp.expression
+        )
         if isinstance(right, (exp.Is, exp.NullSafeEQ, exp.NullSafeNEQ)):
             return True
     return False
@@ -68,7 +72,9 @@ def _prepare(ast: exp.Expr, name: str, schema: MappingSchema) -> Scope:
     if bypass(ast):
         raise ByPassed("The analyzer does not support this statement yet")
 
-    scope = build_scope(_simplify_parens(qualify(ast, schema=schema, dialect="postgres")))
+    scope = build_scope(
+        _simplify_parens(qualify(ast, schema=schema, dialect="postgres"))
+    )
 
     if scope is None:
         raise Unsupported(f"{name} could not create a sqlglot scope")
