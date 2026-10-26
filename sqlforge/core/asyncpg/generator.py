@@ -19,7 +19,6 @@ class APGFnGenerator:
             .import_("datetime")
             .import_("decimal")
             .import_("ipaddress")
-            .import_("msgspec")
             .import_("typing")
             .import_("uuid")
             .newline()

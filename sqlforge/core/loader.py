@@ -20,7 +20,7 @@ META_PATTERN = re.compile(METADATA, re.VERBOSE)
 
 # impl
 def load(config: Config, info: Info) -> list[SQL]:
-    with open(config.path) as file:
+    with open(config.path, "r") as file:
         content = file.read()
         dialect = info["dialect"]
         sqls = parse(content, dialect=dialect)

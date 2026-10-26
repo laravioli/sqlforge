@@ -58,7 +58,7 @@ class PgFetcher:
                     register[rec["oid"]] = cls.convert(rec, kind=kind)
 
                 case TypeKind.COMPOSITE:
-                    assert rec["attributes"] is not None and rec["comp_kind"] is not None
+                    assert rec["comp_kind"] is not None
                     attributes = ATTR_DECODER.decode(rec["attributes"]) if rec["attributes"] else []
                     comp_kind = rec["comp_kind"].decode()
 
