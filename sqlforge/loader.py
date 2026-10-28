@@ -1,9 +1,11 @@
 import re
 from keyword import iskeyword
+from pathlib import Path
 
 from sqlglot import Expr, parse
 
-from .structures import SQL, Config, Info, QueryKind
+from .config import Config, get_cfg
+from .stmt import SQL, QueryKind
 
 # Regex Metadata
 
@@ -18,30 +20,32 @@ name
 META_PATTERN = re.compile(METADATA, re.VERBOSE)
 
 
-class QueryHandler:
-    """
-    Load queries and parse metadata, wrapping a query in a SQL object
-    """
+class LoaderError(Exception): ...
 
-    def __init__(self, config: Config):
-        self.cong = Config
+
+class Loader:
+    def __init__(self, search_start: Path | None = None):
+        self.cfg_path, self.cfg = get_cfg(search_start)
+        self.registry: dict[Path, str] = {}
+
+    def load_query(self):
+        pass
 
 
 # impl
-def load_queries(config: Config, info: Info) -> list[SQL]:
-    with open(config.path, "r") as file:
+def load_queries(config: Config) -> list[SQL]:
+    with open(config.inputs[0], "r") as file:
         content = file.read()
-        dialect = info["dialect"]
-        sqls = parse(content, dialect=dialect)
+        sqls = parse(content, dialect="postgres")
 
-    return [load_query(sql, dialect) for sql in sqls if sql]
+    return [load_query(sql, "postgres") for sql in sqls if sql]
 
 
 def load_query(expr: Expr, dialect) -> SQL:
     target: Expr = expr.args.get("with_") or expr
 
     if not target.comments:
-        raise ValueError("Unable to find metadata")
+        raise LoaderError("Unable to find metadata")
 
     for com in target.comments:
         if pattern := META_PATTERN.match(com.strip()):  # match the first meta_pattern
@@ -52,11 +56,11 @@ def load_query(expr: Expr, dialect) -> SQL:
             kind = QueryKind(groups["kind"])
             # all information should be extracted before this point
             target.comments = []
-            return SQL(name=name, kind=kind, expr=expr, dialect=dialect)
+            return SQL(name=name, kind=kind, expr=expr)
 
-    raise ValueError("Unable to parse metadata")
+    raise LoaderError("Unable to parse metadata")
 
 
 def validate_query_name(name: str):
     if not name.isidentifier() or iskeyword(name):
-        raise ValueError(f"{name} is not a valid function name")
+        raise LoaderError(f"{name} is not a valid function name")

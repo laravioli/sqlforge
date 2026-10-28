@@ -1,11 +1,11 @@
 from collections.abc import Iterable
 
-from sqlforge.core.structures import QueryKind
-from sqlforge.generator import BodyText, FnParamText, FnReturnText, FnText, Text
+from sqlforge.codegen import BodyText, FnParamText, FnReturnText, FnText, Text
 from sqlforge.inference import AnalyzedSQL
+from sqlforge.stmt import QueryKind
 
 
-class APGFnGenerator:
+class APGFnCodegen:
     def __init__(self, sqls: list[AnalyzedSQL], schema_module: str | None = None):
         self.sqls = sqls
         self.schema_module = schema_module

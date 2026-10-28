@@ -7,8 +7,7 @@ from uuid import UUID
 
 import asyncpg
 
-from sqlforge.core.structures import PythonType
-from sqlforge.generator.utils import camel_case
+from sqlforge.codegen.utils import camel_case
 from sqlforge.introspection.structures import (
     ArrayType,
     BaseType,
@@ -21,6 +20,7 @@ from sqlforge.introspection.structures import (
     RangeType,
     TypeKind,
 )
+from sqlforge.stmt import PythonType
 
 from .utils import isidentifier
 

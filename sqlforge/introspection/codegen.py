@@ -1,9 +1,9 @@
-from sqlforge.generator import DomainText, EnumText, StructText, Text
+from sqlforge.codegen import DomainText, EnumText, StructText, Text
 
 from .structures import *
 
 
-class PgSchemaGenerator:
+class PgSchemaCodegen:
     def __init__(
         self,
         pg_reg: PGTypeRegister,

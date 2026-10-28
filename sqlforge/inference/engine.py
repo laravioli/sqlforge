@@ -7,8 +7,8 @@ from functools import cached_property
 
 from sqlglot.errors import SqlglotError
 
-from sqlforge.core.structures import SQL, AttrName, ParamName, PythonType, TypedSQL
 from sqlforge.introspection import PGTypeRegister
+from sqlforge.stmt import SQL, AttrName, ParamName, PythonType, TypedSQL
 
 from .catalog import Catalog
 from .context import Context

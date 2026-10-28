@@ -1,40 +1,38 @@
+from __future__ import annotations
+
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import ClassVar
 
 from asyncpg import Connection
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import exp
 
-from sqlforge.core.queries import load_queries
-from sqlforge.core.structures import (
-    SQL,
-    Config,
-    Info,
-    PreparedSQL,
-    Recipe,
-    TransformedSQL,
-    TypedSQL,
-)
+from sqlforge.config import Config
+from sqlforge.drivers import Driver
 from sqlforge.inference import Engine
 from sqlforge.introspection import PgFetcher
 from sqlforge.introspection.catalog import mapping_schema
+from sqlforge.loader import load_queries
+from sqlforge.stmt import (
+    SQL,
+    TransformedSQL,
+    TypedSQL,
+)
 
+from .codegen import APGFnCodegen
 from .converter import PythonTypeRegister, python_types
-from .generator import APGFnGenerator
 from .utils import get_conn, isidentifier
 
 
 @dataclass
-class AsyncPGRecipe(Recipe):
-    info: ClassVar[Info] = {"dialect": "postgres"}
+class AsyncPGDriver(Driver):
     config: Config
     conn: Connection
 
     # Main
 
     async def pipeline(self):
-        inputs = load_queries(self.config, self.info)
+        inputs = load_queries(self.config)
         queries = self._transform(inputs)
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
@@ -48,7 +46,7 @@ class AsyncPGRecipe(Recipe):
             python_type_register,
             m_schema,
             typed,
-            APGFnGenerator(sqls=engine.analyze()).generate(),
+            APGFnCodegen(sqls=engine.analyze()).generate(),
             engine,
         )
 
@@ -115,6 +113,12 @@ def _transform_one(sql: SQL) -> TransformedSQL:
 
 
 # Prepare
+
+
+@dataclass(frozen=True)
+class PreparedSQL:
+    source: TransformedSQL
+    prepared: PreparedStatement
 
 
 def get_stmt_oids(stmts: Iterable[PreparedStatement]):
