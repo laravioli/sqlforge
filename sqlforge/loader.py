@@ -4,7 +4,7 @@ from pathlib import Path
 
 from sqlglot import Expr, parse
 
-from .config import Config, get_cfg
+from .config import Config
 from .stmt import SQL, QueryKind
 
 # Regex Metadata
@@ -25,7 +25,6 @@ class LoaderError(Exception): ...
 
 class Loader:
     def __init__(self, search_start: Path | None = None):
-        self.cfg_path, self.cfg = get_cfg(search_start)
         self.registry: dict[Path, str] = {}
 
     def load_query(self):

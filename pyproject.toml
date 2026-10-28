@@ -12,6 +12,7 @@ dependencies = [
     "asyncpg>=0.32.0",
     "msgspec>=0.21.1",
     "dd>=0.6.0",
+    "click>=8.1",
 ]
 
 [project.urls]
@@ -19,7 +20,7 @@ Repository = "https://github.com/laravioli/sqlforge"
 Issues = "https://github.com/laravioli/sqlforge/issues"
 
 [project.scripts]
-sqlforge = "sqlforge:main"
+sqlforge = "sqlforge.main:main"
 
 [dependency-groups]
 dev = [

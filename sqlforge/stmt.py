@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum, StrEnum, auto
+from pathlib import Path
 
 from sqlglot import Expr
 
@@ -26,6 +27,12 @@ class QueryKind(StrEnum):
     FETCHVAL = "fetchval"  # fetchval
     EXEC = "exec"  # exec
     EXECMANY = "execmany"  # execmany
+
+
+@dataclass(frozen=True, slots=True)
+class Origin:
+    path: Path
+    index: int
 
 
 @dataclass(frozen=True)
