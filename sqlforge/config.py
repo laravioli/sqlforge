@@ -3,66 +3,31 @@ from typing import Annotated, Any, Literal
 
 import msgspec
 from msgspec import Meta, Struct, toml
-from msgspec.structs import fields
+from msgspec.structs import replace
 
 
 class ConfigError(Exception): ...
 
 
+_CONFIG_LOOKUP = ["sqlforge.toml", "pyproject.toml"]
+
+
 class Config(
     Struct, frozen=True, omit_defaults=True, forbid_unknown_fields=True, rename="kebab"
 ):
-    inputs: Annotated[list[Path], Meta(min_length=1)]
-    output: Path
-    dsn: str
-    env_file: Path | None = None
+    sources: Annotated[list[Path], Meta(min_length=1)]
+    out: Path
+    dsn: str | None = None
     driver: Literal["asyncpg"] = "asyncpg"
     search_path: tuple[str, ...] = ("public",)
     classes: dict[str, str] = {}
 
-
-FileConfig = msgspec.defstruct(
-    "FileConfig",
-    [(f.name, f.type | None, None) for f in fields(Config)],
-    frozen=True,
-    forbid_unknown_fields=True,
-    rename="kebab",
-)
-
-
-def find_config(start: Path) -> tuple[Path, dict[str, Any]] | None:
-    start = start.resolve()
-    home = Path.home().resolve()
-    for path in (start, *start.parents):
-        for name in ("sqlforge.toml", "pyproject.toml"):
-            if (table := _read_table(path / name)) is not None:
-                return path, table
-        if path == home:
-            break
-    return None
-
-
-def _read_table(file: Path) -> dict[str, Any] | None:
-    if not file.is_file():
-        return None
-
-    try:
-        doc = toml.decode(file.read_bytes(), dec_hook=_dec_hook)
-    except msgspec.DecodeError as e:
-        raise ConfigError(f"{file}: {e}") from e
-
-    if file.name == "pyproject.toml":
-        tool = doc.get("tool")
-        doc = tool.get("sqlforge") if isinstance(tool, dict) else None
-        if doc is None:
-            return None  # a pyproject.toml without [tool.sqlforge]: keep searching
-
-    try:
-        msgspec.convert(doc, FileConfig, dec_hook=_dec_hook)  # validate the file alone
-    except msgspec.ValidationError as e:
-        raise ConfigError(f"{file}: {e}") from e
-
-    return doc
+    def resolve_path(self, base: Path):
+        return replace(
+            self,
+            sources=[_resolve_from(base, p) for p in self.sources],
+            out=_resolve_from(base, self.out),
+        )
 
 
 def _dec_hook(type: type[Path], obj: Any) -> Any:
@@ -70,3 +35,55 @@ def _dec_hook(type: type[Path], obj: Any) -> Any:
         return Path(obj)
     else:
         return obj
+
+
+def _resolve_from(base: Path, p: Path) -> Path:
+    return (base / p.expanduser()).resolve()
+
+
+def load_cfg(start: Path) -> Config:
+    start = start.resolve()
+    home = Path.home().resolve()
+
+    if start.is_file():
+        cfg = _read_cfg_file(start)
+        if cfg is not None:
+            return cfg.resolve_path(start.parent)
+    else:
+        path = None
+        cfg = None
+        home = Path.home().resolve()
+        for path in (start, *start.parents):
+            for name in _CONFIG_LOOKUP:
+                cfg = _read_cfg_file(path / name)
+                if cfg is not None:
+                    return cfg.resolve_path(path)
+
+            if path == home:
+                break
+
+    raise ConfigError(
+        f"no sqlforge.toml or pyproject.toml with [tool.sqlforge] found "
+        f"in {start} or its parents (up to {home}); "
+        f"run 'sqlforge init' or pass --file"
+    )
+
+
+def _read_cfg_file(filepath: Path):
+    if filepath.exists():
+        try:
+            match filepath.name:
+                case "pyproject.toml":
+                    doc = toml.decode(
+                        filepath.read_bytes(), type=dict, dec_hook=_dec_hook
+                    )
+                    tool = doc.get("tool")
+                    cfg = tool.get("sqlforge") if isinstance(tool, dict) else None
+                    if cfg is not None:
+                        return msgspec.convert(cfg, type=Config)
+                case "sqlforge.toml":
+                    return toml.decode(
+                        filepath.read_bytes(), type=Config, dec_hook=_dec_hook
+                    )
+        except msgspec.ValidationError as e:
+            raise ConfigError(f"{filepath}: {e}") from e

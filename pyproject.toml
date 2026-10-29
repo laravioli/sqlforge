@@ -20,7 +20,7 @@ Repository = "https://github.com/laravioli/sqlforge"
 Issues = "https://github.com/laravioli/sqlforge/issues"
 
 [project.scripts]
-sqlforge = "sqlforge.main:main"
+sqlforge = "sqlforge.main:cli"
 
 [dependency-groups]
 dev = [

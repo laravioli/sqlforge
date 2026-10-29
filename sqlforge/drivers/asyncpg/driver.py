@@ -12,11 +12,11 @@ from sqlforge.drivers import Driver
 from sqlforge.inference import Engine
 from sqlforge.introspection import PgFetcher
 from sqlforge.introspection.catalog import mapping_schema
-from sqlforge.loader import load_queries
 from sqlforge.stmt import (
     SQL,
     TransformedSQL,
     TypedSQL,
+    load_queries,
 )
 
 from .codegen import APGFnCodegen
