@@ -6,7 +6,8 @@ import click
 
 import sqlforge
 
-from .config import load_cfg
+from .config import ConfigError, load_cfg
+from .stmt import LoaderError, load_sql
 
 
 def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
@@ -51,12 +52,22 @@ def init():
 )
 def gen(file: Path | None):
     """Generate typed code from the sql files."""
-    cfg = load_cfg(file or Path.cwd())
+    try:
+        cfg = load_cfg(file or Path.cwd())
+        sqls = load_sql(cfg)
+    except (ConfigError, LoaderError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if not sqls:
+        click.echo(
+            "Warning: no SQL queries found in sources, nothing to generate", err=True
+        )
+        return
 
     from .forge import Blacksmith
 
     john_smith = Blacksmith(cfg)
-    asyncio.run(john_smith.forge())
+    asyncio.run(john_smith.forge(sqls))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from typing import TypedDict
 
 from .config import Config
 from .drivers.asyncpg import AsyncPGDriver
+from .stmt import SQL
 
 
 class Blacksmith:
@@ -11,8 +12,8 @@ class Blacksmith:
         self.config = config
         self.book = Book(asyncpg=AsyncPGDriver)
 
-    async def forge(self):
-        return await self.find_recipe().run(self.config)
+    async def forge(self, sqls: list[SQL]):
+        return await self.find_recipe().run(self.config, sqls)
 
     def find_recipe(self):
         return self.book[self.config.driver]

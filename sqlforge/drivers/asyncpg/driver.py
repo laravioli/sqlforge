@@ -16,7 +16,6 @@ from sqlforge.stmt import (
     SQL,
     TransformedSQL,
     TypedSQL,
-    load_sql,
 )
 
 from .codegen import APGFnCodegen
@@ -31,9 +30,8 @@ class AsyncPGDriver(Driver):
 
     # Main
 
-    async def pipeline(self):
-        inputs = load_sql(self.config)
-        queries = self._transform(inputs)
+    async def pipeline(self, sqls: list[SQL]):
+        queries = self._transform(sqls)
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
         python_type_register = python_types(register=pg_type_register)
@@ -41,7 +39,7 @@ class AsyncPGDriver(Driver):
         typed = self._convert(prep_queries, python_type_register)
         engine = Engine.from_register(pg_type_register, typed)
         return (
-            inputs,
+            sqls,
             pg_type_register,
             python_type_register,
             m_schema,
@@ -51,10 +49,10 @@ class AsyncPGDriver(Driver):
         )
 
     @classmethod
-    async def run(cls, cfg: Config):
+    async def run(cls, cfg: Config, sqls: list[SQL]):
         async with get_conn(cfg.dsn) as conn:
             recipe = cls(cfg, conn)
-            return await recipe.pipeline()
+            return await recipe.pipeline(sqls)
 
     # Steps
 

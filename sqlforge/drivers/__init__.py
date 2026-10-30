@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from sqlforge.config import Config
+from sqlforge.stmt import SQL
 
 
 class Driver(ABC):
@@ -11,4 +12,4 @@ class Driver(ABC):
 
     @classmethod
     @abstractmethod
-    async def run(cls, cfg: Config) -> Any: ...
+    async def run(cls, cfg: Config, sqls: list[SQL]) -> Any: ...
