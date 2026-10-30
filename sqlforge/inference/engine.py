@@ -118,6 +118,10 @@ class AnalyzedSQL:
     def name(self):
         return self.source.name
 
+    @property
+    def origin(self):
+        return self.source.origin
+
     @cached_property
     def typed_attrs(self) -> list[tuple[AttrName, PythonType]]:
         return [(c.name, c.python) for c in self.analysis.columns]

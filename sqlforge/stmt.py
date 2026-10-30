@@ -6,7 +6,7 @@ from enum import Enum, StrEnum, auto
 from keyword import iskeyword
 from pathlib import Path
 
-from sqlglot import Expr, parse
+from sqlglot import ParseError, TokenError, exp, parse
 
 from .config import Config
 
@@ -30,46 +30,55 @@ META_PATTERN = re.compile(METADATA, re.VERBOSE)
 class LoaderError(Exception): ...
 
 
-class Loader:
-    def __init__(self, search_start: Path | None = None):
-        self.registry: dict[Path, str] = {}
-
-    def load_query(self):
-        pass
-
-
-# impl
-def load_queries(config: Config) -> list[SQL]:
-    with open(config.sources[0], "r") as file:
-        content = file.read()
-        sqls = parse(content, dialect="postgres")
-
-    return [load_query(sql, "postgres") for sql in sqls if sql]
+def load_sql(cfg: Config) -> list[SQL]:
+    sqls: list[SQL] = []
+    for s in cfg.sources:
+        sqls.extend(_load_from_source(s))
+    return sqls
 
 
-def load_query(expr: Expr, dialect) -> SQL:
-    target: Expr = expr.args.get("with_") or expr
+def _load_from_source(src: Path) -> list[SQL]:
+    if src.is_file():
+        return _load_file(src.parent, src)
+
+    return [sql for f in sorted(src.rglob("*.sql")) for sql in _load_file(src, f)]
+
+
+def _load_file(root: Path, file: Path) -> list[SQL]:
+    try:
+        exprs = parse(file.read_text(encoding="utf-8"), dialect="postgres")
+    except (ParseError, TokenError, UnicodeDecodeError) as e:
+        raise LoaderError(f"{file}: {e}") from e
+
+    exprs = [e for e in exprs if e is not None]
+    return [_load_query(e, Origin(root, file, i)) for i, e in enumerate(exprs)]
+
+
+def _load_query(expr: exp.Expr, origin: Origin):
+    target: exp.Expr = expr.args.get("with_") or expr
 
     if not target.comments:
         raise LoaderError("Unable to find metadata")
 
-    for com in target.comments:
-        if pattern := META_PATTERN.match(com.strip()):  # match the first meta_pattern
-            groups = pattern.groupdict()
-            name: str = groups["name"]
-            validate_query_name(name)
-            # raise if not convertible
-            kind = QueryKind(groups["kind"])
-            # all information should be extracted before this point
+    for com in target.comments or []:
+        if match := META_PATTERN.fullmatch(com.strip()):  # match the first meta_pattern
+            name, kind = match["name"], match["kind"]
+            if not name.isidentifier() or iskeyword(name):
+                raise LoaderError(f"{origin}: {name!r} is not a valid function name")
+            try:
+                query_kind = QueryKind(kind)
+            except ValueError:
+                valid = ", ".join(k.value for k in QueryKind)
+                raise LoaderError(
+                    f"{origin}: unknown kind {kind!r} (expected one of: {valid})"
+                ) from None
+
             target.comments = []
-            return SQL(name=name, kind=kind, expr=expr)
+            return SQL(name=name, origin=origin, kind=query_kind, expr=expr)
 
-    raise LoaderError("Unable to parse metadata")
-
-
-def validate_query_name(name: str):
-    if not name.isidentifier() or iskeyword(name):
-        raise LoaderError(f"{name} is not a valid function name")
+    raise LoaderError(
+        f'{origin}: missing metadata comment, expected e.g. "-- name: get_user :one"'
+    )
 
 
 class ParamStyle(Enum):
@@ -92,15 +101,24 @@ class QueryKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Origin:
-    path: Path
+    root: Path
+    file: Path
     index: int
 
+    @property
+    def rel(self) -> Path:
+        return self.file.relative_to(self.root)
 
-@dataclass(frozen=True)
+    def __str__(self) -> str:
+        return f"{self.file} (statement {self.index + 1})"
+
+
+@dataclass(frozen=True, slots=True)
 class SQL:
     name: str
+    origin: Origin
     kind: QueryKind
-    expr: Expr
+    expr: exp.Expr
 
     def __str__(self):
         return self.expr.sql(dialect="postgres")
@@ -109,13 +127,17 @@ class SQL:
         return replace(self, expr=self.expr.copy())
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TransformedSQL:
     source: SQL
     params: dict[str, int]
 
+    @property
+    def origin(self):
+        return self.source.origin
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class TypedSQL:
     source: SQL
     typed_params: dict[ParamName, PythonType]
@@ -124,3 +146,7 @@ class TypedSQL:
     @property
     def name(self):
         return self.source.name
+
+    @property
+    def origin(self):
+        return self.source.origin

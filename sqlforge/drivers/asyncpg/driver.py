@@ -16,7 +16,7 @@ from sqlforge.stmt import (
     SQL,
     TransformedSQL,
     TypedSQL,
-    load_queries,
+    load_sql,
 )
 
 from .codegen import APGFnCodegen
@@ -32,7 +32,7 @@ class AsyncPGDriver(Driver):
     # Main
 
     async def pipeline(self):
-        inputs = load_queries(self.config)
+        inputs = load_sql(self.config)
         queries = self._transform(inputs)
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)

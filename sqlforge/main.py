@@ -1,3 +1,4 @@
+import asyncio
 import platform
 from pathlib import Path
 
@@ -36,6 +37,7 @@ def cli(): ...
 
 @cli.command()
 def init():
+    """Create an empty sqlforge.toml config file."""
     click.echo("TODO")
 
 
@@ -48,9 +50,13 @@ def init():
     help="Config file (sqlforge.toml / pyproject.toml)",
 )
 def gen(file: Path | None):
-    """Generate code from the SQL files in SRCS directories."""
+    """Generate typed code from the sql files."""
     cfg = load_cfg(file or Path.cwd())
-    click.echo(cfg)
+
+    from .forge import Blacksmith
+
+    john_smith = Blacksmith(cfg)
+    asyncio.run(john_smith.forge())
 
 
 if __name__ == "__main__":
