@@ -39,19 +39,19 @@ def load_sql(cfg: Config) -> list[SQL]:
 
 def _load_from_source(src: Path) -> list[SQL]:
     if src.is_file():
-        return _load_file(src.parent, src)
+        return _load_file(src, src)
 
     return [sql for f in sorted(src.rglob("*.sql")) for sql in _load_file(src, f)]
 
 
-def _load_file(root: Path, file: Path) -> list[SQL]:
+def _load_file(src: Path, file: Path) -> list[SQL]:
     try:
         exprs = parse(file.read_text(encoding="utf-8"), dialect="postgres")
     except (ParseError, TokenError, UnicodeDecodeError) as e:
         raise LoaderError(f"{file}: {e}") from e
 
     exprs = [e for e in exprs if e is not None]
-    return [_load_query(e, Origin(root, file, i)) for i, e in enumerate(exprs)]
+    return [_load_query(e, Origin(src, file, i)) for i, e in enumerate(exprs)]
 
 
 def _load_query(expr: exp.Expr, origin: Origin):
@@ -101,13 +101,9 @@ class QueryKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Origin:
-    root: Path
+    src: Path
     file: Path
     index: int
-
-    @property
-    def rel(self) -> Path:
-        return self.file.relative_to(self.root)
 
     def __str__(self) -> str:
         return f"{self.file} (statement {self.index + 1})"

@@ -2,20 +2,19 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
-from functools import cached_property
 
 from sqlglot.errors import SqlglotError
 
-from sqlforge.introspection import PGTypeRegister
-from sqlforge.stmt import SQL, AttrName, ParamName, PythonType, TypedSQL
+from sqlforge.introspection.structures import PGTypeRegister
+from sqlforge.stmt import TypedSQL
 
 from .catalog import Catalog
 from .context import Context
 from .exception import ByPassed, Unsupported
 from .infer import Analyzer
-from .lattice import MAYBE_NULL, Nullability
+from .lattice import MAYBE_NULL
 from .prepare import prepare_sql
+from .structures import Analysis, AnalyzedSQL, ColumnResult
 
 logger = logging.getLogger(__name__)
 
@@ -87,41 +86,3 @@ class Engine:
             error=error,
             internal=internal,
         )
-
-
-@dataclass(frozen=True)
-class ColumnResult:
-    name: str
-    type: str
-    nullability: Nullability
-
-    @property
-    def python(self) -> str:
-        return self.nullability.python(self.type)
-
-
-@dataclass(frozen=True)
-class Analysis:
-    columns: tuple[ColumnResult, ...]
-    bypassed: bool
-    error: str | None = None
-    internal: bool = False
-
-
-@dataclass
-class AnalyzedSQL:
-    source: SQL
-    typed_params: dict[ParamName, PythonType]
-    analysis: Analysis
-
-    @property
-    def name(self):
-        return self.source.name
-
-    @property
-    def origin(self):
-        return self.source.origin
-
-    @cached_property
-    def typed_attrs(self) -> list[tuple[AttrName, PythonType]]:
-        return [(c.name, c.python) for c in self.analysis.columns]

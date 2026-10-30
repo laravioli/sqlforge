@@ -13,9 +13,9 @@ class Blacksmith:
         self.book = Book(asyncpg=AsyncPGDriver)
 
     async def forge(self, sqls: list[SQL]):
-        return await self.find_recipe().run(self.config, sqls)
+        return await self.find_driver().run(self.config, sqls)
 
-    def find_recipe(self):
+    def find_driver(self):
         return self.book[self.config.driver]
 
 

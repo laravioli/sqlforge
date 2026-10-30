@@ -10,15 +10,14 @@ from sqlglot import exp
 from sqlforge.config import Config
 from sqlforge.drivers import Driver
 from sqlforge.inference import Engine
-from sqlforge.introspection import PgFetcher
-from sqlforge.introspection.catalog import mapping_schema
+from sqlforge.introspection import PgFetcher, PgSchemaCodegen
 from sqlforge.stmt import (
     SQL,
     TransformedSQL,
     TypedSQL,
 )
 
-from .codegen import APGFnCodegen
+from .codegen import generate
 from .converter import PythonTypeRegister, python_types
 from .utils import get_conn, isidentifier
 
@@ -32,27 +31,30 @@ class AsyncPGDriver(Driver):
 
     async def pipeline(self, sqls: list[SQL]):
         queries = self._transform(sqls)
+
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
+
         python_type_register = python_types(register=pg_type_register)
-        m_schema = mapping_schema(pg_type_register)
         typed = self._convert(prep_queries, python_type_register)
         engine = Engine.from_register(pg_type_register, typed)
-        return (
-            sqls,
-            pg_type_register,
-            python_type_register,
-            m_schema,
-            typed,
-            APGFnCodegen(sqls=engine.analyze()).generate(),
-            engine,
-        )
+
+        return {
+            "input": sqls,
+            "pg_types": pg_type_register,
+            "engine": engine,
+            "schema": PgSchemaCodegen(
+                pg_type_register, python_type_register
+            ).generate_schema(),
+            "codegen": generate,
+            "output": engine.analyze(),
+        }
 
     @classmethod
     async def run(cls, cfg: Config, sqls: list[SQL]):
         async with get_conn(cfg.dsn) as conn:
-            recipe = cls(cfg, conn)
-            return await recipe.pipeline(sqls)
+            driver = cls(cfg, conn)
+            return await driver.pipeline(sqls)
 
     # Steps
 

@@ -48,7 +48,7 @@ def init():
     "-f",
     type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
     default=None,
-    help="Config file (sqlforge.toml / pyproject.toml)",
+    help="Path to a config file (toml format)",
 )
 def gen(file: Path | None):
     """Generate typed code from the sql files."""
