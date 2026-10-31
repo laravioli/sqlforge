@@ -20,10 +20,12 @@ class Config(
     classes: dict[str, str] = {}
 
     def resolve(self, cfg_file: Path):
-        sources = [_resolve_source(cfg_file, p) for p in self.sources]
-        _validate_sources(cfg_file, sources)
         return replace(
-            self, sources=sources, out=_resolve_path(cfg_file.parent, self.out)
+            self,
+            sources=_validate_sources(
+                cfg_file, [_resolve_path(cfg_file.parent, p) for p in self.sources]
+            ),
+            out=_resolve_path(cfg_file.parent, self.out),
         )
 
 
@@ -33,16 +35,6 @@ def _dec_hook(type: type[Path], obj: Any) -> Any:
     raise NotImplementedError(f"unsupported type: {type}")
 
 
-# Resolve
-
-
-def _resolve_source(cfg_file: Path, p: Path) -> Path:
-    src = _resolve_path(cfg_file.parent, p)
-    _validate_src(cfg_file, src)
-
-    return src
-
-
 def _resolve_path(base: Path, p: Path) -> Path:
     return (base / p.expanduser()).resolve()
 
@@ -50,23 +42,25 @@ def _resolve_path(base: Path, p: Path) -> Path:
 # Validate
 
 
-def _validate_src(cfg_file: Path, src: Path):
-    if not src.exists():
-        raise ConfigError(f"{cfg_file}: source {src} does not exist")
-
-    if src.is_file() and src.suffix != ".sql":
-        raise ConfigError(f"{cfg_file}: {src} is not a .sql file")
-
-
-def _validate_sources(cfg_file: Path, sources: list[Path]) -> None:
+def _validate_sources(cfg_file: Path, sources: list[Path]) -> list[Path]:
     used = {"schema"}
+
     for src in sources:
+        if not src.exists():
+            raise ConfigError(f"{cfg_file}: source {src} does not exist")
+
+        if src.is_file() and src.suffix != ".sql":
+            raise ConfigError(f"{cfg_file}: {src} is not a .sql file")
         name = (src.name if src.is_dir() else src.stem).casefold()
+
         if name in used:
             raise ConfigError(
                 f"{cfg_file}: {src} would be generated as {name!r}, already used"
             )
+
         used.add(name)
+
+    return sources
 
 
 # Load
@@ -85,8 +79,10 @@ def load_cfg(start: Path) -> Config:
     for path in (start, *start.parents):
         for name in _CONFIG_LOOKUP:
             file = path / name
+
             if file.is_file() and (cfg := _read_cfg_file(file)) is not None:
                 return cfg.resolve(file)
+
         if path == home:
             break
 
@@ -105,9 +101,11 @@ def _read_cfg_file(cfg_file: Path) -> Config | None:
                 cfg = tool.get("sqlforge") if isinstance(tool, dict) else None
                 if cfg is not None:
                     return convert(cfg, type=Config, dec_hook=_dec_hook)
+
             case _:
                 return toml.decode(
                     cfg_file.read_bytes(), type=Config, dec_hook=_dec_hook
                 )
+
     except DecodeError as e:
         raise ConfigError(f"{cfg_file}: {e}") from e

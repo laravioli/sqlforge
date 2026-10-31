@@ -63,11 +63,13 @@ def _load_query(expr: exp.Expr, origin: Origin):
 
     for com in target.comments or []:
         if match := META_PATTERN.fullmatch(com.strip()):  # match the first meta_pattern
-            name = match["name"]
-            _validate_fn_name(name, origin)
-            query_kind = _validate_kind(match["kind"], origin)
             target.comments = []
-            return SQL(name=name, origin=origin, kind=query_kind, expr=expr)
+            return SQL(
+                name=_validate_name(match["name"], origin),
+                origin=origin,
+                kind=_validate_kind(match["kind"], origin),
+                expr=expr,
+            )
 
     raise LoaderError(
         f'{origin}: missing metadata comment, expected e.g. "-- name: get_user :one"'
@@ -77,9 +79,10 @@ def _load_query(expr: exp.Expr, origin: Origin):
 # Validation
 
 
-def _validate_fn_name(name: str, origin: Origin):
+def _validate_name(name: str, origin: Origin):
     if not name.isidentifier() or iskeyword(name.lower()):
         raise LoaderError(f"{origin}: {name!r} is not a valid function name")
+    return name
 
 
 def _validate_kind(kind: str, origin: Origin):
