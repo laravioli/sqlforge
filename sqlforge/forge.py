@@ -4,7 +4,7 @@ from typing import TypedDict
 
 from .config import Config
 from .drivers.asyncpg.driver import AsyncPGDriver
-from .stmt import SQL
+from .structures import SQL
 
 
 class Blacksmith:

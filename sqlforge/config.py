@@ -4,9 +4,7 @@ from typing import Annotated, Any, Literal
 from msgspec import DecodeError, Meta, Struct, convert, toml
 from msgspec.structs import replace
 
-
-class ConfigError(Exception): ...
-
+from .errors import ConfigError
 
 _CONFIG_LOOKUP = ["sqlforge.toml", "pyproject.toml"]
 

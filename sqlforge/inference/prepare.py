@@ -9,7 +9,7 @@ from sqlglot.optimizer.simplify import simplify_parens
 from sqlglot.schema import MappingSchema
 
 from sqlforge.introspection.catalog import View
-from sqlforge.stmt import SQL
+from sqlforge.structures import SQL
 
 from .exception import ByPassed, Unsupported
 

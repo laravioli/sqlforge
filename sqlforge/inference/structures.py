@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import cached_property
 
-from sqlforge.stmt import SQL, StrAttrName, StrParamName, StrPythonType
+from sqlforge.structures import SQL, StrAttrName, StrParamName, StrPythonType
 
 from .lattice import Nullability
 

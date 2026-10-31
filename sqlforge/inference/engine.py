@@ -6,7 +6,7 @@ import time
 from sqlglot.errors import SqlglotError
 
 from sqlforge.introspection.structures import PGTypeRegister
-from sqlforge.stmt import TypedSQL
+from sqlforge.structures import TypedSQL
 
 from .catalog import Catalog
 from .context import Context

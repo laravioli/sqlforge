@@ -14,7 +14,7 @@ from sqlforge.drivers import Driver
 from sqlforge.inference.engine import Engine
 from sqlforge.introspection.codegen import PgSchemaCodegen, get_user_schema_names
 from sqlforge.introspection.fetch import PgFetcher
-from sqlforge.stmt import (
+from sqlforge.structures import (
     SQL,
     TransformedSQL,
     TypedSQL,

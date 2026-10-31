@@ -6,8 +6,9 @@ import click
 
 import sqlforge
 
-from .config import ConfigError, load_cfg
-from .stmt import LoaderError, load_sql
+from .config import load_cfg
+from .errors import SqlforgeError
+from .loader import load_sql
 from .writer import write
 
 
@@ -56,7 +57,7 @@ def gen(file: Path | None):
     try:
         cfg = load_cfg(file or Path.cwd())
         sqls = load_sql(cfg)
-    except (ConfigError, LoaderError) as e:
+    except SqlforgeError as e:
         raise click.ClickException(str(e)) from e
 
     if not sqls:

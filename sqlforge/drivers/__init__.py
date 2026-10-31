@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from sqlforge.codegen.structures import Output
 from sqlforge.config import Config
-from sqlforge.stmt import SQL
+from sqlforge.structures import SQL
 
 
 class Driver(ABC):
