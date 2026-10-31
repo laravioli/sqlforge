@@ -1,10 +1,10 @@
-class SqlforgeError(Exception):
-    pass
+class SqlforgeError(Exception): ...
 
 
-class ConfigError(SqlforgeError):
-    pass
+class ConfigError(SqlforgeError): ...
 
 
-class LoaderError(SqlforgeError):
-    pass
+class LoaderError(SqlforgeError): ...
+
+
+class DriverError(SqlforgeError): ...

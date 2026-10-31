@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from keyword import iskeyword
 from pathlib import Path
 
@@ -21,6 +22,9 @@ name
 (?P<kind>\w+)
 """
 META_PATTERN = re.compile(METADATA, re.VERBOSE)
+
+
+# Loader
 
 
 def load_sql(cfg: Config) -> list[SQL]:
@@ -44,31 +48,46 @@ def _load_file(src: Path, file: Path) -> list[SQL]:
         raise LoaderError(f"{file}: {e}") from e
 
     exprs = [e for e in exprs if e is not None]
-    return [_load_query(e, Origin(src, file, i)) for i, e in enumerate(exprs)]
+    sqls = [_load_query(e, Origin(src, file, i)) for i, e in enumerate(exprs)]
+
+    if dupes := [n for n, c in Counter(s.name.lower() for s in sqls).items() if c > 1]:
+        raise LoaderError(f"{file}: duplicate query names: {', '.join(dupes)}")
+
+    return sqls
 
 
 def _load_query(expr: exp.Expr, origin: Origin):
     target: exp.Expr = expr.args.get("with_") or expr
-
-    if not target.comments:
-        raise LoaderError("Unable to find metadata")
+    while not target.comments and isinstance(target, (exp.SetOperation, exp.Subquery)):
+        target = target.this
 
     for com in target.comments or []:
         if match := META_PATTERN.fullmatch(com.strip()):  # match the first meta_pattern
-            name, kind = match["name"], match["kind"]
-            if not name.isidentifier() or iskeyword(name):
-                raise LoaderError(f"{origin}: {name!r} is not a valid function name")
-            try:
-                query_kind = QueryKind(kind)
-            except ValueError:
-                valid = ", ".join(k.value for k in QueryKind)
-                raise LoaderError(
-                    f"{origin}: unknown kind {kind!r} (expected one of: {valid})"
-                ) from None
-
+            name = match["name"]
+            _validate_fn_name(name, origin)
+            query_kind = _validate_kind(match["kind"], origin)
             target.comments = []
             return SQL(name=name, origin=origin, kind=query_kind, expr=expr)
 
     raise LoaderError(
         f'{origin}: missing metadata comment, expected e.g. "-- name: get_user :one"'
     )
+
+
+# Validation
+
+
+def _validate_fn_name(name: str, origin: Origin):
+    if not name.isidentifier() or iskeyword(name.lower()):
+        raise LoaderError(f"{origin}: {name!r} is not a valid function name")
+
+
+def _validate_kind(kind: str, origin: Origin):
+    try:
+        query_kind = QueryKind(kind)
+    except ValueError:
+        valid = ", ".join(k.value for k in QueryKind)
+        raise LoaderError(
+            f"{origin}: unknown kind {kind!r} (expected one of: {valid})"
+        ) from None
+    return query_kind

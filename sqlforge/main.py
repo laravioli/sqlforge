@@ -1,10 +1,9 @@
 import asyncio
+import importlib.metadata
 import platform
 from pathlib import Path
 
 import click
-
-import sqlforge
 
 from .config import load_cfg
 from .errors import SqlforgeError
@@ -16,8 +15,8 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     if not value or ctx.resilient_parsing:
         return
     click.echo(
-        "Running sqlforge {version} with {py_implementation} {py_version} on {system}".format(  # noqa: UP032
-            version=sqlforge.__version__,
+        "Running sqlforge {version} with {py_implementation} {py_version} on {system}".format(
+            version=importlib.metadata.version("sqlforge"),
             py_implementation=platform.python_implementation(),
             py_version=platform.python_version(),
             system=platform.system(),
@@ -68,7 +67,10 @@ def gen(file: Path | None):
 
     from .forge import Blacksmith
 
-    write(cfg.out, asyncio.run(Blacksmith(cfg).forge(sqls)))
+    try:
+        write(cfg.out, asyncio.run(Blacksmith(cfg).forge(sqls)))
+    except (ConnectionError, SqlforgeError) as e:
+        raise click.ClickException(str(e)) from e
 
 
 if __name__ == "__main__":

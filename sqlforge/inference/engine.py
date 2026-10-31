@@ -38,7 +38,8 @@ class Engine:
         e = time.perf_counter_ns()
         size = len([a for a in analyze if a.analysis.bypassed is False])
         logger.debug(size)
-        logger.debug("time : %f ms", (e - s) / (size * 1000000))
+        if size:
+            logger.debug("time : %f ms", (e - s) / (size * 1000000))
         return analyze
 
     def analyze_one(self, statement: TypedSQL) -> Analysis:

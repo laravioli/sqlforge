@@ -20,10 +20,10 @@ class Config(
     classes: dict[str, str] = {}
 
     def resolve(self, cfg_file: Path):
+        sources = [_resolve_source(cfg_file, p) for p in self.sources]
+        _validate_sources(cfg_file, sources)
         return replace(
-            self,
-            sources=[_resolve_source(cfg_file, p) for p in self.sources],
-            out=_resolve_path(cfg_file.parent, self.out),
+            self, sources=sources, out=_resolve_path(cfg_file.parent, self.out)
         )
 
 
@@ -31,6 +31,9 @@ def _dec_hook(type: type[Path], obj: Any) -> Any:
     if type is Path:
         return Path(obj)
     raise NotImplementedError(f"unsupported type: {type}")
+
+
+# Resolve
 
 
 def _resolve_source(cfg_file: Path, p: Path) -> Path:
@@ -44,6 +47,9 @@ def _resolve_path(base: Path, p: Path) -> Path:
     return (base / p.expanduser()).resolve()
 
 
+# Validate
+
+
 def _validate_src(cfg_file: Path, src: Path):
     if not src.exists():
         raise ConfigError(f"{cfg_file}: source {src} does not exist")
@@ -51,8 +57,19 @@ def _validate_src(cfg_file: Path, src: Path):
     if src.is_file() and src.suffix != ".sql":
         raise ConfigError(f"{cfg_file}: {src} is not a .sql file")
 
-    if src.is_dir() and src.parts[-1] == "schema":
-        raise ConfigError(f"{cfg_file}, {src}: schema folder is reserved")
+
+def _validate_sources(cfg_file: Path, sources: list[Path]) -> None:
+    used = {"schema"}
+    for src in sources:
+        name = (src.name if src.is_dir() else src.stem).casefold()
+        if name in used:
+            raise ConfigError(
+                f"{cfg_file}: {src} would be generated as {name!r}, already used"
+            )
+        used.add(name)
+
+
+# Load
 
 
 def load_cfg(start: Path) -> Config:
