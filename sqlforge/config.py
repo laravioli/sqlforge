@@ -53,6 +53,9 @@ def _validate_src(cfg_file: Path, src: Path):
     if src.is_file() and src.suffix != ".sql":
         raise ConfigError(f"{cfg_file}: {src} is not a .sql file")
 
+    if src.is_dir() and src.parts[-1] == "schema":
+        raise ConfigError(f"{cfg_file}, {src}: schema folder is reserved")
+
 
 def load_cfg(start: Path) -> Config:
     start = start.resolve()

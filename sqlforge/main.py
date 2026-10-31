@@ -67,14 +67,7 @@ def gen(file: Path | None):
 
     from .forge import Blacksmith
 
-    john_smith = Blacksmith(cfg)
-    sword = asyncio.run(john_smith.forge(sqls))
-    write(
-        cfg.out,
-        sword["codegen"]["schema"],
-        sword["codegen"]["queries"],
-        sword["output"],
-    )
+    write(cfg.out, asyncio.run(Blacksmith(cfg).forge(sqls)))
 
 
 if __name__ == "__main__":

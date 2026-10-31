@@ -1,5 +1,4 @@
 from sqlforge.codegen.base import DomainText, EnumText, StructText, Text
-from sqlforge.codegen.structures import Schema
 
 from .structures import *
 
@@ -15,7 +14,7 @@ class PgSchemaCodegen:
         self.pg_reg = pg_reg
         self.python_reg = python_reg
 
-    def generate_schema(self) -> Schema:
+    def generate_schema(self, ns: str):
         txt = (
             Text()
             .import_("asyncpg")
@@ -24,16 +23,18 @@ class PgSchemaCodegen:
             .import_("ipaddress")
             .import_("typing")
             .import_("uuid")
+            .import_from("enum", "StrEnum")
+            .import_from("msgspec", "Struct")
             .newline()
         )
 
-        for pg_text in self._pg_writer():
+        for pg_text in self._pg_writer(ns):
             txt.add(pg_text).newline()
 
-        return Schema(content={"public": txt})
+        return txt
 
-    def _pg_writer(self):
-        for pg_type in self.pg_reg.values():
+    def _pg_writer(self, ns: str):
+        for pg_type in (v for v in self.pg_reg.values() if v.ns == ns):
             match pg_type:
                 case CompositeType():
                     yield self._composite(pg_type)
@@ -44,14 +45,17 @@ class PgSchemaCodegen:
 
     def _composite(self, composite: CompositeType):
         txt = StructText(composite.name)
-        for attr in composite.attributes:
-            attr_type = (
-                self.python_reg[attr.attr_type]
-                if not attr.nullable
-                else self.python_reg[attr.attr_type] + " | None"
-            )
-            attr_default = "" if not attr.nullable else "None"
-            txt.add_attribute(attr.name, attr_type, attr_default)
+        if not composite.attributes:
+            txt.add("   pass")
+        else:
+            for attr in composite.attributes:
+                attr_type = (
+                    self.python_reg[attr.attr_type]
+                    if not attr.nullable
+                    else self.python_reg[attr.attr_type] + " | None"
+                )
+                attr_default = "" if not attr.nullable else "None"
+                txt.add_attribute(attr.name, attr_type, attr_default)
         return txt
 
     def _enum(self, enum: EnumType):

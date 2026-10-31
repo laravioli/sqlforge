@@ -7,6 +7,8 @@ from asyncpg import Connection
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import exp
 
+from sqlforge.codegen.output import make_files, make_schemas
+from sqlforge.codegen.structures import Output
 from sqlforge.config import Config
 from sqlforge.drivers import Driver
 from sqlforge.inference.engine import Engine
@@ -30,7 +32,7 @@ class AsyncPGDriver(Driver):
 
     # Main
 
-    async def pipeline(self, sqls: list[SQL]):
+    async def pipeline(self, sqls: list[SQL]) -> list[Output]:
         queries = self._transform(sqls)
 
         prep_queries = await self._prepare(queries)
@@ -39,20 +41,15 @@ class AsyncPGDriver(Driver):
         python_type_register = python_types(register=pg_type_register)
 
         typed = self._convert(prep_queries, python_type_register)
-        engine = Engine.from_register(pg_type_register, typed)
+        analyzed = Engine.from_register(pg_type_register, typed).analyze()
+        nss = sorted({v.ns for v in pg_type_register.values()})
 
-        return {
-            "input": sqls,
-            "pg_types": pg_type_register,
-            "engine": engine,
-            "codegen": {
-                "schema": lambda: PgSchemaCodegen(
-                    pg_type_register, python_type_register
-                ).generate_schema(),
-                "queries": generate,
-            },
-            "output": engine.analyze(),
-        }
+        schemas = make_schemas(
+            nss, PgSchemaCodegen(pg_type_register, python_type_register).generate_schema
+        )
+        files = make_files(analyzed, nss, generate)
+
+        return [*schemas, *files]
 
     @classmethod
     async def run(cls, cfg: Config, sqls: list[SQL]):
