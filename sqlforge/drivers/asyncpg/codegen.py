@@ -35,9 +35,7 @@ def generate(file: File, schema_import: str | None):
 def _fn_writer(sqls: list[AnalyzedSQL]):
     for sql in sqls:
         txt = (
-            Text(
-                f'{sql.source.name.upper()} : typing.Final[str] = """{sql.source!s}"""'
-            )
+            Text(f"{sql.source.name.upper()} : typing.Final[str] = {str(sql.source)!r}")
             .newline()
             .newline()
         )
