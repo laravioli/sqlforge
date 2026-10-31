@@ -1,6 +1,9 @@
-from sqlforge.codegen import DomainText, EnumText, StructText, Text
+from sqlforge.codegen.base import DomainText, EnumText, StructText, Text
+from sqlforge.codegen.structures import Schema
 
 from .structures import *
+
+# TODO output per namespace
 
 
 class PgSchemaCodegen:
@@ -12,7 +15,7 @@ class PgSchemaCodegen:
         self.pg_reg = pg_reg
         self.python_reg = python_reg
 
-    def generate_schema(self) -> Text:
+    def generate_schema(self) -> Schema:
         txt = (
             Text()
             .import_("asyncpg")
@@ -27,7 +30,7 @@ class PgSchemaCodegen:
         for pg_text in self._pg_writer():
             txt.add(pg_text).newline()
 
-        return txt
+        return Schema(content={"public": txt})
 
     def _pg_writer(self):
         for pg_type in self.pg_reg.values():

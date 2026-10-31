@@ -3,6 +3,8 @@ from pathlib import Path
 
 from sqlforge.inference.structures import AnalyzedSQL
 
+from .base import Text
+
 
 @dataclass(frozen=True, slots=True)
 class File:
@@ -25,3 +27,8 @@ class File:
     @property
     def depth(self):
         return len(self.out.parts)
+
+
+@dataclass(frozen=True, slots=True)
+class Schema:
+    content: dict[str, Text]

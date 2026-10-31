@@ -9,8 +9,9 @@ from sqlglot import exp
 
 from sqlforge.config import Config
 from sqlforge.drivers import Driver
-from sqlforge.inference import Engine
-from sqlforge.introspection import PgFetcher, PgSchemaCodegen
+from sqlforge.inference.engine import Engine
+from sqlforge.introspection.codegen import PgSchemaCodegen
+from sqlforge.introspection.fetch import PgFetcher
 from sqlforge.stmt import (
     SQL,
     TransformedSQL,
@@ -36,6 +37,7 @@ class AsyncPGDriver(Driver):
         pg_type_register = await self._get_type_register(prep_queries)
 
         python_type_register = python_types(register=pg_type_register)
+
         typed = self._convert(prep_queries, python_type_register)
         engine = Engine.from_register(pg_type_register, typed)
 
@@ -43,10 +45,12 @@ class AsyncPGDriver(Driver):
             "input": sqls,
             "pg_types": pg_type_register,
             "engine": engine,
-            "schema": PgSchemaCodegen(
-                pg_type_register, python_type_register
-            ).generate_schema(),
-            "codegen": generate,
+            "codegen": {
+                "schema": lambda: PgSchemaCodegen(
+                    pg_type_register, python_type_register
+                ).generate_schema(),
+                "queries": generate,
+            },
             "output": engine.analyze(),
         }
 

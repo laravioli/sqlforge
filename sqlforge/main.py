@@ -8,6 +8,7 @@ import sqlforge
 
 from .config import ConfigError, load_cfg
 from .stmt import LoaderError, load_sql
+from .writer import write
 
 
 def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
@@ -67,7 +68,13 @@ def gen(file: Path | None):
     from .forge import Blacksmith
 
     john_smith = Blacksmith(cfg)
-    asyncio.run(john_smith.forge(sqls))
+    sword = asyncio.run(john_smith.forge(sqls))
+    write(
+        cfg.out,
+        sword["codegen"]["schema"],
+        sword["codegen"]["queries"],
+        sword["output"],
+    )
 
 
 if __name__ == "__main__":

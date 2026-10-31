@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 
-from sqlforge.codegen import BodyText, FnParamText, FnReturnText, FnText, Text
+from sqlforge.codegen.base import BodyText, FnParamText, FnReturnText, FnText, Text
 from sqlforge.codegen.structures import File
 from sqlforge.inference.structures import AnalyzedSQL
 from sqlforge.stmt import QueryKind
