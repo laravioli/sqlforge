@@ -10,9 +10,9 @@ from sqlglot import ParseError, TokenError, exp, parse
 
 from .config import Config
 
-type ParamName = str
-type AttrName = str
-type PythonType = str
+type StrParamName = str
+type StrAttrName = str
+type StrPythonType = str
 
 # Regex Metadata
 
@@ -136,8 +136,8 @@ class TransformedSQL:
 @dataclass(frozen=True, slots=True)
 class TypedSQL:
     source: SQL
-    typed_params: dict[ParamName, PythonType]
-    typed_attrs: list[tuple[AttrName, PythonType]]
+    typed_params: dict[StrParamName, StrPythonType]
+    typed_attrs: list[tuple[StrAttrName, StrPythonType]]
 
     @property
     def name(self):

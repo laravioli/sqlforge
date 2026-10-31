@@ -6,7 +6,7 @@ from sqlforge.inference.structures import AnalyzedSQL
 from sqlforge.stmt import QueryKind
 
 
-def generate(file: File, schema_import: str):
+def generate(file: File, schema_import: str | None):
     txt = (
         Text("from __future__ import annotations")
         .newline()
@@ -21,8 +21,9 @@ def generate(file: File, schema_import: str):
         .import_from("collections.abc", "Iterable")
         .import_from("enum", "StrEnum")
         .import_from("msgspec", "Struct")
-        .import_from(f"{'.' * file.depth}schema", schema_import)
     )
+    if schema_import:
+        txt.import_from(f"{'.' * file.depth}schema", schema_import)
 
     txt.newline()
     for fn in _fn_writer(file.sqls):

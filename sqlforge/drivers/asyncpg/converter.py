@@ -7,6 +7,12 @@ from uuid import UUID
 
 import asyncpg
 
+from sqlforge.codegen.structures import (
+    PythonArrayType,
+    PythonRangeType,
+    PythonRegularType,
+    PythonType,
+)
 from sqlforge.codegen.utils import camel_case
 from sqlforge.introspection.structures import (
     ArrayType,
@@ -20,7 +26,6 @@ from sqlforge.introspection.structures import (
     RangeType,
     TypeKind,
 )
-from sqlforge.stmt import PythonType
 
 from .utils import isidentifier
 
@@ -110,23 +115,28 @@ PG_BASE_TYPE: dict[str, str] = {
 def python_type(oid: Oid, register: PGTypeRegister) -> PythonType:
     match register[oid]:
         case ArrayType(elemtype=elem):
-            return f"list[{python_type(elem, register)} | None]"
+            return PythonArrayType(python_type(elem, register))
         case RangeType(kind=kind, range_subtype=sub):
-            rng = f"asyncpg.Range[{python_type(sub, register)}]"
-            return f"list[{rng}]" if kind is TypeKind.MULTI_RANGE else rng
+            return PythonRangeType(
+                python_type(sub, register), kind is TypeKind.MULTI_RANGE
+            )
 
         case CompositeType() | DomainType() | EnumType() as t if t.is_user_defined:
             name = camel_case(t.name)
-            return name if isidentifier(name) else ANY  # "my-table", "Weird Type"
+            return (
+                PythonRegularType(name, t.ns)
+                if isidentifier(name)
+                else PythonRegularType(ANY)
+            )  # "my-table", "Weird Type"
 
         case DomainType(basetype=base):
             return python_type(base, register)
 
         case BaseType(name=name) | PseudoType(name=name):
-            return PG_BASE_TYPE.get(name, ANY)
+            return PythonRegularType(PG_BASE_TYPE.get(name, ANY))
 
         case _:  # system composite types
-            return ANY
+            return PythonRegularType(ANY)
 
 
 def python_types(register: PGTypeRegister) -> PythonTypeRegister:

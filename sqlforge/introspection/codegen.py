@@ -1,15 +1,14 @@
 from sqlforge.codegen.base import DomainText, EnumText, StructText, Text
+from sqlforge.codegen.structures import PythonType
 
 from .structures import *
-
-# TODO output per namespace
 
 
 class PgSchemaCodegen:
     def __init__(
         self,
         pg_reg: PGTypeRegister,
-        python_reg: dict[Oid, str],
+        python_reg: dict[Oid, PythonType],
     ):
         self.pg_reg = pg_reg
         self.python_reg = python_reg
@@ -17,6 +16,7 @@ class PgSchemaCodegen:
     def generate_schema(self, ns: str):
         txt = (
             Text()
+            .import_from("__future__", "annotations")
             .import_("asyncpg")
             .import_("datetime")
             .import_("decimal")
@@ -25,8 +25,14 @@ class PgSchemaCodegen:
             .import_("uuid")
             .import_from("enum", "StrEnum")
             .import_from("msgspec", "Struct")
-            .newline()
         )
+
+        nss = get_user_schema_names(self.pg_reg)
+        nss.remove(ns)
+        if nss:
+            txt.import_from(".", ", ".join(nss))
+
+        txt.newline()
 
         for pg_text in self._pg_writer(ns):
             txt.add(pg_text).newline()
@@ -37,24 +43,25 @@ class PgSchemaCodegen:
         for pg_type in (v for v in self.pg_reg.values() if v.ns == ns):
             match pg_type:
                 case CompositeType():
-                    yield self._composite(pg_type)
+                    yield self._composite(pg_type, ns)
                 case DomainType():
-                    yield self._domain(pg_type)
+                    yield self._domain(pg_type, ns)
                 case EnumType():
                     yield self._enum(pg_type)
 
-    def _composite(self, composite: CompositeType):
+    def _composite(self, composite: CompositeType, ns: str):
         txt = StructText(composite.name)
         if not composite.attributes:
             txt.add("   pass")
         else:
             for attr in composite.attributes:
-                attr_type = (
-                    self.python_reg[attr.attr_type]
-                    if not attr.nullable
-                    else self.python_reg[attr.attr_type] + " | None"
-                )
-                attr_default = "" if not attr.nullable else "None"
+                pt = self.python_reg[attr.attr_type]
+                attr_type = pt.hint if pt.ns == ns else pt.qualified_hint
+                if attr.nullable:
+                    attr_type += " | None"
+                    attr_default = "None"
+                else:
+                    attr_default = ""
                 txt.add_attribute(attr.name, attr_type, attr_default)
         return txt
 
@@ -64,5 +71,12 @@ class PgSchemaCodegen:
             txt.add_value(value.upper(), value)
         return txt
 
-    def _domain(self, domain: DomainType):
-        return DomainText(domain.name, self.python_reg[domain.basetype])
+    def _domain(self, domain: DomainType, ns: str):
+        pt = self.python_reg[domain.basetype]
+        return DomainText(domain.name, pt.hint if pt.ns == ns else pt.qualified_hint)
+
+
+def get_user_schema_names(pg_type_register: PGTypeRegister):
+    return sorted(
+        {v.ns for v in pg_type_register.values() if v.ns != "pg_catalog"}
+    )  # TODO : normalize names

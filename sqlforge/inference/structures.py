@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import cached_property
 
-from sqlforge.stmt import SQL, AttrName, ParamName, PythonType
+from sqlforge.stmt import SQL, StrAttrName, StrParamName, StrPythonType
 
 from .lattice import Nullability
 
@@ -30,7 +30,7 @@ class Analysis:
 @dataclass
 class AnalyzedSQL:
     source: SQL
-    typed_params: dict[ParamName, PythonType]
+    typed_params: dict[StrParamName, StrPythonType]
     analysis: Analysis
 
     @property
@@ -42,5 +42,5 @@ class AnalyzedSQL:
         return self.source.origin
 
     @cached_property
-    def typed_attrs(self) -> list[tuple[AttrName, PythonType]]:
+    def typed_attrs(self) -> list[tuple[StrAttrName, StrPythonType]]:
         return [(c.name, c.python) for c in self.analysis.columns]

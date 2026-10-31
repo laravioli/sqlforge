@@ -12,7 +12,7 @@ from sqlforge.codegen.structures import Output
 from sqlforge.config import Config
 from sqlforge.drivers import Driver
 from sqlforge.inference.engine import Engine
-from sqlforge.introspection.codegen import PgSchemaCodegen
+from sqlforge.introspection.codegen import PgSchemaCodegen, get_user_schema_names
 from sqlforge.introspection.fetch import PgFetcher
 from sqlforge.stmt import (
     SQL,
@@ -34,22 +34,20 @@ class AsyncPGDriver(Driver):
 
     async def pipeline(self, sqls: list[SQL]) -> list[Output]:
         queries = self._transform(sqls)
-
         prep_queries = await self._prepare(queries)
         pg_type_register = await self._get_type_register(prep_queries)
-
         python_type_register = python_types(register=pg_type_register)
+        typed_queries = self._convert(prep_queries, python_type_register)
+        final = Engine.from_register(pg_type_register, typed_queries).analyze()
+        nss = get_user_schema_names(pg_type_register)
 
-        typed = self._convert(prep_queries, python_type_register)
-        analyzed = Engine.from_register(pg_type_register, typed).analyze()
-        nss = sorted({v.ns for v in pg_type_register.values()})
-
-        schemas = make_schemas(
-            nss, PgSchemaCodegen(pg_type_register, python_type_register).generate_schema
-        )
-        files = make_files(analyzed, nss, generate)
-
-        return [*schemas, *files]
+        return [
+            *make_schemas(
+                nss,
+                PgSchemaCodegen(pg_type_register, python_type_register).generate_schema,
+            ),
+            *make_files(final, nss, generate),
+        ]
 
     @classmethod
     async def run(cls, cfg: Config, sqls: list[SQL]):
@@ -141,8 +139,8 @@ def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
     pattrs = sql.prepared.get_attributes()
     return TypedSQL(
         source=sql.source.source,
-        typed_params={p: reg[pp.oid] for p, pp in zip(params, pparams)},
-        typed_attrs=[(attr.name, reg[attr.type.oid]) for attr in pattrs],
+        typed_params={p: reg[pp.oid].qualified_hint for p, pp in zip(params, pparams)},
+        typed_attrs=[(attr.name, reg[attr.type.oid].qualified_hint) for attr in pattrs],
     )
 
 
