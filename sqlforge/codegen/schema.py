@@ -1,13 +1,17 @@
+import re
+
 from sqlforge.introspection.structures import (
     CompositeType,
     DomainType,
     EnumType,
     Oid,
+    PGAttribute,
     PGTypeRegister,
 )
 
 from .base import DomainText, EnumText, StructText, Text
-from .structures import PythonType
+from .structures import PYTHON_ANY, PythonType
+from .utils import camel_case, isidentifier
 
 
 class SchemaCodegen:
@@ -23,14 +27,16 @@ class SchemaCodegen:
         txt = (
             Text()
             .import_from("__future__", "annotations")
-            .import_("asyncpg")
-            .import_("datetime")
-            .import_("decimal")
-            .import_("ipaddress")
-            .import_("typing")
-            .import_("uuid")
-            .import_from("enum", "StrEnum")
-            .import_from("msgspec", "Struct")
+            .import_(
+                "asyncpg",
+                "datetime",
+                "decimal",
+                "enum",
+                "ipaddress",
+                "typing",
+                "uuid",
+                "msgspec",
+            )
         )
 
         nss = get_user_schema_names(self.pg_reg)
@@ -40,13 +46,15 @@ class SchemaCodegen:
 
         txt.newline()
 
-        for pg_text in self._pg_writer(ns):
+        for pg_text in self._writer(ns):
             txt.add(pg_text).newline()
 
         return txt
 
-    def _pg_writer(self, ns: str):
+    def _writer(self, ns: str):
         for pg_type in (v for v in self.pg_reg.values() if v.ns == ns):
+            if not isidentifier(camel_case(pg_type.name)):
+                continue
             match pg_type:
                 case CompositeType():
                     yield self._composite(pg_type, ns)
@@ -56,25 +64,30 @@ class SchemaCodegen:
                     yield self._enum(pg_type)
 
     def _composite(self, composite: CompositeType, ns: str):
+        attrs = composite.attributes
+        if not all(isidentifier(a.name) and not a.name.startswith("__") for a in attrs):
+            name = camel_case(composite.name)
+            fields = ", ".join(f"{a.name!r}: {self._hint(a, ns)!r}" for a in attrs)
+            return Text(f"{name} = typing.TypedDict({name!r}, {{{fields}}})\n")
+
         txt = StructText(composite.name)
-        if not composite.attributes:
+        if not attrs:
             txt.add("   pass")
-        else:
-            for attr in composite.attributes:
-                pt = self.python_reg[attr.attr_type]
-                attr_type = pt.hint if pt.ns == ns else pt.qualified_hint
-                if attr.nullable:
-                    attr_type += " | None"
-                    attr_default = "None"
-                else:
-                    attr_default = ""
-                txt.add_attribute(attr.name, attr_type, attr_default)
+        for attr in attrs:
+            txt.add_attribute(
+                attr.name, self._hint(attr, ns), "None" if attr.nullable else ""
+            )
         return txt
+
+    def _hint(self, attr: PGAttribute, ns: str) -> str:
+        pt = self.python_reg[attr.attr_type]
+        hint = pt.hint if pt.ns == ns else pt.qualified_hint
+        return f"{hint} | None" if attr.nullable and pt is not PYTHON_ANY else hint
 
     def _enum(self, enum: EnumType):
         txt = EnumText(enum.name)
-        for value in enum.values:
-            txt.add_value(value.upper(), value)
+        for name, value in zip(_member_names(enum.values), enum.values):
+            txt.add_value(name, value)
         return txt
 
     def _domain(self, domain: DomainType, ns: str):
@@ -83,6 +96,19 @@ class SchemaCodegen:
 
 
 def get_user_schema_names(pg_type_register: PGTypeRegister):
-    return sorted(
-        {v.ns for v in pg_type_register.values() if v.ns != "pg_catalog"}
-    )  # TODO : normalize names
+    return sorted({v.ns for v in pg_type_register.values() if v.ns != "pg_catalog"})
+
+
+def _member_names(labels: list[str]) -> list[str]:
+    names: list[str] = []
+    for label in labels:
+        name = re.sub(r"\W+", "_", label.upper()).strip("_")
+        if not name.isidentifier():  # "", "1ST"
+            name = f"_{name}"
+        if not name.isidentifier():  # exotic unicode left over
+            name = f"_{len(names)}"
+        unique, i = name, 2
+        while unique in names:
+            unique, i = f"{name}_{i}", i + 1
+        names.append(unique)
+    return names

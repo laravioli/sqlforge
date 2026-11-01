@@ -25,6 +25,7 @@ from sqlforge.structures import QueryKind
 
 from .base import BodyText, FnParamText, FnReturnText, FnText, Text
 from .structures import (
+    PYTHON_ANY,
     File,
     PythonArrayType,
     PythonRangeType,
@@ -34,8 +35,6 @@ from .structures import (
 from .utils import camel_case, isidentifier
 
 type PythonTypeRegister = dict[Oid, PythonType]
-
-ANY = "typing.Any"
 
 
 def type_name(t) -> str:
@@ -120,6 +119,7 @@ def python_type(oid: Oid, register: PGTypeRegister) -> PythonType:
     match register[oid]:
         case ArrayType(elemtype=elem):
             return PythonArrayType(python_type(elem, register))
+
         case RangeType(kind=kind, range_subtype=sub):
             return PythonRangeType(
                 python_type(sub, register), kind is TypeKind.MULTI_RANGE
@@ -127,20 +127,23 @@ def python_type(oid: Oid, register: PGTypeRegister) -> PythonType:
 
         case CompositeType() | DomainType() | EnumType() as t if t.is_user_defined:
             name = camel_case(t.name)
-            return (
-                PythonRegularType(name, t.ns)
-                if isidentifier(name)
-                else PythonRegularType(ANY)
-            )  # "my-table", "Weird Type"
+            if isidentifier(name):
+                return PythonRegularType(name, t.ns)
+            if isinstance(t, DomainType):
+                return python_type(
+                    t.basetype, register
+                )  # no alias generated: base type
+            return PYTHON_ANY  # "my-table", "Weird Type"
 
         case DomainType(basetype=base):
             return python_type(base, register)
 
         case BaseType(name=name) | PseudoType(name=name):
-            return PythonRegularType(PG_BASE_TYPE.get(name, ANY))
+            pg_base = PG_BASE_TYPE.get(name)
+            return PythonRegularType(pg_base) if pg_base is not None else PYTHON_ANY
 
         case _:  # system composite types
-            return PythonRegularType(ANY)
+            return PYTHON_ANY
 
 
 def python_types(register: PGTypeRegister) -> PythonTypeRegister:
@@ -160,8 +163,6 @@ def generate(file: File, schema_import: str | None):
         .import_("uuid")
         .newline()
         .import_from("collections.abc", "Iterable")
-        .import_from("enum", "StrEnum")
-        .import_from("msgspec", "Struct")
     )
     if schema_import:
         txt.import_from(f"{'.' * file.depth}schema", schema_import)

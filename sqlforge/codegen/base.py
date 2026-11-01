@@ -4,6 +4,8 @@ from .utils import camel_case
 
 # Base
 
+HINT_ANY = "typing.Any"
+
 
 class Text:
     def __init__(self, string: str = ""):
@@ -21,8 +23,9 @@ class Text:
         self._string += "    "
         return self
 
-    def import_(self, module: str):
-        self._string += f"import {module}\n"
+    def import_(self, *module: str):
+        for m in module:
+            self._string += f"import {m}\n"
         return self
 
     def import_from(self, module: str, *objs: str):
@@ -38,7 +41,7 @@ class Text:
 
 class StructText(Text):
     def __init__(self, name: str):
-        self._string = f"class {camel_case(name)}(Struct, kw_only=True):\n"
+        self._string = f"class {camel_case(name)}(msgspec.Struct, kw_only=True):\n"
 
     def add_attribute(self, attr_name: str, attr_type: str, default: str | None = None):
         return (
@@ -51,7 +54,7 @@ class StructText(Text):
 
 class EnumText(Text):
     def __init__(self, cls_name: str):
-        self._string = f"class {camel_case(cls_name)}(StrEnum):\n"
+        self._string = f"class {camel_case(cls_name)}(enum.StrEnum):\n"
 
     def add_value(self, enum: str, enum_value: str):
         return self.indent().add(f"{enum.upper()} = {enum_value!r}").newline()

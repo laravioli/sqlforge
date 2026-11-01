@@ -9,7 +9,7 @@ from typing import Protocol
 
 from sqlforge.inference.structures import AnalyzedSQL
 
-from .base import Text
+from .base import HINT_ANY, Text
 
 
 class Output(Protocol):
@@ -97,6 +97,9 @@ class PythonRegularType:
     @cached_property
     def qualified_hint(self):
         return f"{self.ns}.{self.hint}" if self.ns is not None else self.hint
+
+
+PYTHON_ANY = PythonRegularType(hint=HINT_ANY)
 
 
 @dataclass(frozen=True)

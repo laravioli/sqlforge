@@ -147,5 +147,10 @@ GROUP BY
   t.typname
 """
 
-# NOTE _TYPEINFO and LOOKUP_TYPES are slightly modified version of asyncpg introspection queries
+PREPARED_TYPES = """\
+SELECT name, result_types::oid[] FROM pg_catalog.pg_prepared_statements
+WHERE name = any($1::text[])
+"""
+
+
 # NOTE require PG > 13
