@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections import defaultdict
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Protocol
 
@@ -45,6 +46,30 @@ class File:
     def gen(self):
         return self._gen(self, self._schema_import)
 
+    @classmethod
+    def makes(
+        cls,
+        sqls: list[AnalyzedSQL],
+        nss: Sequence[str],
+        gen: Callable[[File, str | None], Text],
+    ) -> list[File]:
+        groups: dict[Path, list[AnalyzedSQL]] = defaultdict(list)
+        schema_import = ", ".join(nss) if nss else None
+
+        for sql in sqls:
+            groups[sql.origin.file].append(sql)
+
+        return [
+            cls(
+                src=g[0].origin.src,
+                file=file,
+                sqls=g,
+                _gen=gen,
+                _schema_import=schema_import,
+            )
+            for file, g in groups.items()
+        ]
+
 
 @dataclass(frozen=True, slots=True)
 class Schema:
@@ -53,6 +78,12 @@ class Schema:
 
     def gen(self):
         return self._gen()
+
+    @classmethod
+    def makes(cls, nss: Sequence[str], gen: Callable[[str], Text]) -> list[Schema]:
+        return [
+            cls(out=Path("schema") / f"{sc}.py", _gen=partial(gen, sc)) for sc in nss
+        ]
 
 
 type PythonType = PythonRegularType | PythonArrayType | PythonRangeType

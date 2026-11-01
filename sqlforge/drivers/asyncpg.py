@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import cast
 
-from asyncpg import Connection, PostgresError
+import asyncpg
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import exp
 
-from sqlforge.codegen.output import make_files, make_schemas
-from sqlforge.codegen.structures import Output
+from sqlforge.codegen.asyncpg import PythonTypeRegister, generate, python_types
+from sqlforge.codegen.schema import SchemaCodegen, get_user_schema_names
+from sqlforge.codegen.structures import File, Output, Schema
+from sqlforge.codegen.utils import isidentifier
 from sqlforge.config import Config
 from sqlforge.drivers import Driver
 from sqlforge.errors import DriverError
 from sqlforge.inference.engine import Engine
-from sqlforge.introspection.codegen import PgSchemaCodegen, get_user_schema_names
 from sqlforge.introspection.fetch import PgFetcher
 from sqlforge.structures import (
     SQL,
@@ -21,15 +24,11 @@ from sqlforge.structures import (
     TypedSQL,
 )
 
-from .codegen import generate
-from .converter import PythonTypeRegister, python_types
-from .utils import get_conn, isidentifier
-
 
 @dataclass
 class AsyncPGDriver(Driver):
     config: Config
-    conn: Connection
+    conn: asyncpg.Connection
 
     # Main
 
@@ -43,11 +42,11 @@ class AsyncPGDriver(Driver):
         nss = get_user_schema_names(pg_type_register)
 
         return [
-            *make_schemas(
+            *Schema.makes(
                 nss,
-                PgSchemaCodegen(pg_type_register, python_type_register).generate_schema,
+                SchemaCodegen(pg_type_register, python_type_register).generate_schema,
             ),
-            *make_files(final, nss, generate),
+            *File.makes(final, nss, generate),
         ]
 
     @classmethod
@@ -69,7 +68,7 @@ class AsyncPGDriver(Driver):
                 stmt = await self.conn.prepare(
                     sql.text
                 )  # NOTE: could use a pool for perf
-            except PostgresError as e:
+            except asyncpg.PostgresError as e:
                 raise DriverError(f"{sql.origin}: {e}") from e
             prepared.append(PreparedSQL(source=sql, prepared=stmt))
         return prepared
@@ -147,4 +146,21 @@ def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
     )
 
 
-# Infer Null
+# Connection
+
+
+@asynccontextmanager
+async def get_conn(dsn: str | None):
+    try:
+        conn = await asyncpg.connect(dsn=dsn, server_settings={"jit": "off"})
+    except (OSError, asyncpg.PostgresError) as e:
+        hint = (
+            ""
+            if dsn
+            else " (no dsn configured; used PG* environment variables and defaults)"
+        )
+        raise ConnectionError(f"could not connect to PostgreSQL: {e}{hint}") from e
+    try:
+        yield cast(asyncpg.Connection, conn)
+    finally:
+        await conn.close()

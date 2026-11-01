@@ -3,7 +3,6 @@ from pathlib import Path
 from sqlforge.codegen.structures import Output
 
 
-# TODO header (generated file, do not edit)? cleanup before write?
 def write(out: Path, outputs: list[Output]) -> None:
     rendered = {out / o.out: str(o.gen()) for o in outputs}
 

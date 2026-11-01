@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 from .config import Config
-from .drivers.asyncpg.driver import AsyncPGDriver
+from .drivers.asyncpg import AsyncPGDriver
 from .structures import SQL
 
 

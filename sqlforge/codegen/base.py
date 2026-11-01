@@ -54,7 +54,7 @@ class EnumText(Text):
         self._string = f"class {camel_case(cls_name)}(StrEnum):\n"
 
     def add_value(self, enum: str, enum_value: str):
-        return self.indent().add(f"{enum.upper()} = '{enum_value}'").newline()
+        return self.indent().add(f"{enum.upper()} = {enum_value!r}").newline()
 
 
 class DomainText(Text):

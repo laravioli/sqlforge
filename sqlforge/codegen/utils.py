@@ -19,3 +19,7 @@ def py_name(name: str, taken: set[str]) -> str:
 
 def camel_case(s: str):
     return "".join(w.capitalize() for w in s.split("_"))
+
+
+def isidentifier(ident: str) -> bool:
+    return ident.isidentifier() and not keyword.iskeyword(ident)

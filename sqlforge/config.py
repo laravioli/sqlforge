@@ -39,7 +39,7 @@ def _resolve_path(base: Path, p: Path) -> Path:
     return (base / p.expanduser()).resolve()
 
 
-# Validate
+# Validation
 
 
 def _validate_sources(cfg_file: Path, sources: list[Path]) -> list[Path]:
@@ -63,7 +63,7 @@ def _validate_sources(cfg_file: Path, sources: list[Path]) -> list[Path]:
     return sources
 
 
-# Load
+# Loader
 
 
 def load_cfg(start: Path) -> Config:
