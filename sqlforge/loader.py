@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
 from keyword import iskeyword
 from pathlib import Path
 
@@ -49,9 +48,7 @@ def _load_file(src: Path, file: Path) -> list[SQL]:
 
     exprs = [e for e in exprs if e is not None]
     sqls = [_load_query(e, Origin(src, file, i)) for i, e in enumerate(exprs)]
-
-    if dupes := [n for n, c in Counter(s.name.lower() for s in sqls).items() if c > 1]:
-        raise LoaderError(f"{file}: duplicate query names: {', '.join(dupes)}")
+    _check_dup_name(file, sqls)
 
     return sqls
 
@@ -94,3 +91,12 @@ def _validate_kind(kind: str, origin: Origin):
             f"{origin}: unknown kind {kind!r} (expected one of: {valid})"
         ) from None
     return query_kind
+
+
+def _check_dup_name(filepath: Path, sqls: list[SQL]):
+    seen = set()
+    for sql in sqls:
+        name = sql.name.lower()
+        if name in seen:
+            raise LoaderError(f"{filepath}: duplicate query name {sql.name!r}")
+        seen.add(name)

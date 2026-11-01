@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass
+from functools import cache
 from typing import Any, ClassVar
 
 from sqlglot import exp
@@ -116,7 +117,7 @@ def mapping_schema(
                     nested=True,
                 )
             case t:
-                return DataType.build(t.name, dialect="postgres", udt=True)
+                return _parse_type(t.name).copy()
 
     def column(attr: Column) -> DataType:
         dt = sqlglot_type(attr.attr_type, register)
@@ -129,3 +130,8 @@ def mapping_schema(
             k: column(v) for k, v in rel.columns.items()
         }
     return SearchPathSchema(mapping, search_path)
+
+
+@cache
+def _parse_type(name: str) -> DataType:
+    return DataType.build(name, dialect="postgres", udt=True)

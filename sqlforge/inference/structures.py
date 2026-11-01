@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import cached_property
 
-from sqlforge.structures import SQL, StrAttrName, StrParamName, StrPythonType
+from sqlforge.structures import StrAttrName, StrParamName, StrPythonType, TransformedSQL
 
 from .lattice import Nullability
 
@@ -29,7 +29,7 @@ class Analysis:
 
 @dataclass
 class AnalyzedSQL:
-    source: SQL
+    source: TransformedSQL
     typed_params: dict[StrParamName, StrPythonType]
     analysis: Analysis
 

@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import dd.autoref as _bdd
 else:
+    # https://github.com/tulip-control/dd/issues/107
+    _hide_nx = "networkx" not in sys.modules
+    if _hide_nx:
+        sys.modules["networkx"] = None
     try:
         import dd.cudd as _bdd
     except ImportError:
         import dd.autoref as _bdd
+    finally:
+        if _hide_nx:
+            del sys.modules["networkx"]
 
 from collections.abc import Iterable, Sequence
 from enum import Enum

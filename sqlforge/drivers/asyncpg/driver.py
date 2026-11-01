@@ -63,10 +63,12 @@ class AsyncPGDriver(Driver):
         return [_transform_one(sql) for sql in sqls]
 
     async def _prepare(self, sqls: list[TransformedSQL]):
-        prepared = []
+        prepared: list[PreparedSQL] = []
         for sql in sqls:
             try:
-                stmt = await self.conn.prepare(str(sql.source))
+                stmt = await self.conn.prepare(
+                    sql.text
+                )  # NOTE: could use a pool for perf
             except PostgresError as e:
                 raise DriverError(f"{sql.origin}: {e}") from e
             prepared.append(PreparedSQL(source=sql, prepared=stmt))
@@ -90,22 +92,26 @@ class AsyncPGDriver(Driver):
 
 
 # Transform
-RESERVED_PARAMS = frozenset({"conn", "timeout", "record_class", "column", "args"})
+_RESERVED_PARAMS = frozenset({"conn", "timeout", "record_class", "column", "args"})
 
 
 def _transform_one(sql: SQL) -> TransformedSQL:
+    return sql.transform(_t)
+
+
+def _t(sql: SQL):
+    """compute params and modify sql expression in place (no copy)"""
     params: dict[str, int] = {}
     # list(): the walk must not reach the $N nodes inserted below
     for p in list(sql.expr.find_all(exp.Parameter, exp.Placeholder)):
         if isinstance(p, exp.Parameter):
             raise DriverError(f"{sql.origin}: use :name parameters, not ${p.name}")
-        if not isidentifier(p.name) or p.name in RESERVED_PARAMS:
+        if not isidentifier(p.name) or p.name in _RESERVED_PARAMS:
             raise DriverError(f"{sql.origin}: {p.name!r} can't be a parameter name")
 
         n = params.setdefault(p.name, len(params) + 1)
         p.replace(exp.Parameter(this=exp.Literal.number(n)))
-
-    return TransformedSQL(sql, params)
+    return sql.expr, params
 
 
 # Prepare
@@ -135,7 +141,7 @@ def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
     pparams = sql.prepared.get_parameters()
     pattrs = sql.prepared.get_attributes()
     return TypedSQL(
-        source=sql.source.source,
+        source=sql.source,
         typed_params={p: reg[pp.oid].qualified_hint for p, pp in zip(params, pparams)},
         typed_attrs=[(attr.name, reg[attr.type.oid].qualified_hint) for attr in pattrs],
     )

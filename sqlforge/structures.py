@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Self
 
 from sqlglot import exp
 
@@ -40,23 +42,27 @@ class SQL:
     def __str__(self):
         return self.expr.sql(dialect="postgres")
 
-    def copy(self):
-        return replace(self, expr=self.expr.copy())
+    def transform(self, t: Callable[[Self], tuple[exp.Expr, dict[str, int]]]):
+        expr, params = t(self)
+        return TransformedSQL(
+            self.name,
+            self.origin,
+            self.kind,
+            expr,
+            params,
+            expr.sql(dialect="postgres"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
-class TransformedSQL:
-    source: SQL
+class TransformedSQL(SQL):
     params: dict[str, int]
-
-    @property
-    def origin(self):
-        return self.source.origin
+    text: str
 
 
 @dataclass(frozen=True, slots=True)
 class TypedSQL:
-    source: SQL
+    source: TransformedSQL
     typed_params: dict[StrParamName, StrPythonType]
     typed_attrs: list[tuple[StrAttrName, StrPythonType]]
 

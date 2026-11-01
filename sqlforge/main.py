@@ -1,19 +1,17 @@
-import asyncio
-import importlib.metadata
-import platform
 from pathlib import Path
 
 import click
 
-from .config import load_cfg
 from .errors import SqlforgeError
-from .loader import load_sql
-from .writer import write
 
 
 def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> None:
     if not value or ctx.resilient_parsing:
         return
+
+    import importlib.metadata
+    import platform
+
     click.echo(
         "Running sqlforge {version} with {py_implementation} {py_version} on {system}".format(
             version=importlib.metadata.version("sqlforge"),
@@ -53,6 +51,9 @@ def init():
 )
 def gen(file: Path | None):
     """Generate typed code from the sql files."""
+    from .config import load_cfg
+    from .loader import load_sql
+
     try:
         cfg = load_cfg(file or Path.cwd())
         sqls = load_sql(cfg)
@@ -65,7 +66,10 @@ def gen(file: Path | None):
         )
         return
 
+    import asyncio
+
     from .forge import Blacksmith
+    from .writer import write
 
     try:
         write(cfg.out, asyncio.run(Blacksmith(cfg).forge(sqls)))
