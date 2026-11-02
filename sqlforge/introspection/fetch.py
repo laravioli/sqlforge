@@ -5,7 +5,7 @@ from typing import cast
 from asyncpg import Connection
 from msgspec.json import Decoder
 
-from .stmt import LOOKUP_TYPES, TYPE_ENUM, USER_TYPE_OIDS
+from .stmt import LOOKUP_TYPES, RESULT_TYPES, TYPE_ENUM, USER_TYPE_OIDS
 from .structures import (
     ArrayType,
     BaseType,
@@ -25,23 +25,34 @@ from .structures import (
 ATTR_DECODER = Decoder(type=list[PGAttribute])
 
 
-class PgFetcher:
+class Fetcher:
     def __init__(self, conn: Connection):
         self._conn = conn
         self._udf_oids: asyncio.Task[Sequence[Oid] | None] | None = None
 
-    async def fetch_types(self, oids: Sequence[int] = ()):
+    async def get_type_register(self, stmt_oids: set[int]) -> PGTypeRegister:
+        user_type_oids = await self._get_user_oids()
+        oids = stmt_oids | set(user_type_oids)
+        return await self._types(list(oids))
+
+    async def _types(self, oids: Sequence[int] = ()):
         records = cast(list[TypeRecord], await self._conn.fetch(LOOKUP_TYPES, oids))
         enums = {r["oid"]: r["values"] for r in await self._conn.fetch(TYPE_ENUM)}
         return self._convert_type_records(records, enums)
 
-    async def fetch_fn(self):
-        pass
-
-    async def get_user_oids(self) -> Sequence[Oid]:
+    async def _get_user_oids(self) -> Sequence[Oid]:
         if self._udf_oids is None:
             self._udf_oids = asyncio.create_task(self._conn.fetchval(USER_TYPE_OIDS))
         return await self._udf_oids or ()
+
+    async def result_types(self, names: Sequence[str]) -> dict[str, list[Oid] | None]:
+        if self._conn.get_server_version() < (16,):
+            return {}
+        records = await self._conn.fetch(RESULT_TYPES, names)
+        return {r["name"]: r["result_types"] for r in records}
+
+    async def fetch_fn(self):
+        pass
 
     def _convert_type_records(
         self, recs: list[TypeRecord], enums: dict[Oid, list[str]]

@@ -147,7 +147,7 @@ GROUP BY
   t.typname
 """
 
-PREPARED_TYPES = """\
+RESULT_TYPES = """\
 SELECT name, result_types::oid[] FROM pg_catalog.pg_prepared_statements
 WHERE name = any($1::text[])
 """

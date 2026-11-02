@@ -17,7 +17,7 @@ from sqlforge.config import Config
 from sqlforge.drivers import Driver
 from sqlforge.errors import DriverError
 from sqlforge.inference.engine import Engine
-from sqlforge.introspection.fetch import PgFetcher
+from sqlforge.introspection.fetch import Fetcher
 from sqlforge.structures import (
     SQL,
     TransformedSQL,
@@ -25,17 +25,20 @@ from sqlforge.structures import (
 )
 
 
-@dataclass
 class AsyncPGDriver(Driver):
-    config: Config
-    conn: asyncpg.Connection
+    def __init__(self, config: Config, conn: asyncpg.Connection):
+        self.config = config
+        self.conn = conn
+        self.fetcher = Fetcher(conn)
 
     # Main
 
     async def pipeline(self, sqls: list[SQL]) -> list[Output]:
         queries = self._transform(sqls)
         prep_queries = await self._prepare(queries)
-        pg_type_register = await self._get_type_register(prep_queries)
+        pg_type_register = await self.fetcher.get_type_register(
+            _get_stmt_oids(prep_queries)
+        )
         python_type_register = python_types(register=pg_type_register)
         typed_queries = self._convert(prep_queries, python_type_register)
         final = Engine.from_register(pg_type_register, typed_queries).analyze()
@@ -62,7 +65,7 @@ class AsyncPGDriver(Driver):
         return [_transform_one(sql) for sql in sqls]
 
     async def _prepare(self, sqls: list[TransformedSQL]):
-        prepared: list[PreparedSQL] = []
+        stmts: list[PreparedStatement] = []
         for sql in sqls:
             try:
                 stmt = await self.conn.prepare(
@@ -70,24 +73,19 @@ class AsyncPGDriver(Driver):
                 )  # NOTE: could use a pool for perf
             except asyncpg.PostgresError as e:
                 raise DriverError(f"{sql.origin}: {e}") from e
-            prepared.append(PreparedSQL(source=sql, prepared=stmt))
-        return prepared
+
+            stmts.append(stmt)
+
+        declared = await self.fetcher.result_types([stmt.get_name() for stmt in stmts])
+        return [
+            PreparedSQL(sql, stmt, declared.get(stmt.get_name()) or _reported(stmt))
+            for sql, stmt in zip(sqls, stmts)
+        ]
 
     def _convert(
         self, sqls: list[PreparedSQL], reg: PythonTypeRegister
     ) -> list[TypedSQL]:
         return [_convert_one(sql, reg) for sql in sqls]
-
-    # Utils
-
-    async def _get_type_register(self, stmts: list[PreparedSQL]):
-        stmt_oids = get_stmt_oids(stmt.prepared for stmt in stmts)
-        fetcher = PgFetcher(self.conn)
-        user_type_oids = await fetcher.get_user_oids()
-        oids = stmt_oids | set(
-            user_type_oids
-        )  # we combine stamement oids with introspected db oids
-        return await fetcher.fetch_types(list(oids))
 
 
 # Transform
@@ -120,15 +118,20 @@ def _t(sql: SQL):
 class PreparedSQL:
     source: TransformedSQL
     prepared: PreparedStatement
+    result_oids: list[int]  # declared types: a domain column keeps its domain
 
 
-def get_stmt_oids(stmts: Iterable[PreparedStatement]):
+def _reported(stmt: PreparedStatement) -> list[int]:
+    return [attr.type.oid for attr in stmt.get_attributes()]  # domains as base types
+
+
+def _get_stmt_oids(stmts: Iterable[PreparedSQL]):
     """Helper to get postgres type oids used in sql stamements"""
     return {
         oid
         for stmt in stmts
-        for oid in {param.oid for param in stmt.get_parameters()}
-        | {attr.type.oid for attr in stmt.get_attributes()}
+        for oid in {param.oid for param in stmt.prepared.get_parameters()}
+        | set(stmt.result_oids)
     }
 
 
@@ -142,7 +145,10 @@ def _convert_one(sql: PreparedSQL, reg: PythonTypeRegister) -> TypedSQL:
     return TypedSQL(
         source=sql.source,
         typed_params={p: reg[pp.oid].qualified_hint for p, pp in zip(params, pparams)},
-        typed_attrs=[(attr.name, reg[attr.type.oid].qualified_hint) for attr in pattrs],
+        typed_attrs=[
+            (attr.name, reg[oid].qualified_hint)
+            for attr, oid in zip(pattrs, sql.result_oids, strict=True)
+        ],
     )
 
 
