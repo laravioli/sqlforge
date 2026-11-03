@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -113,10 +114,14 @@ class PythonRangeType:
 class DriverCtx:
     pg_types: PGTypeRegister
     python_types: PythonTypeRegister
-    default_import: list[str]
+    default_import: Sequence[str]
 
     @cached_property
     def schema_import(self):
         return tuple(
             sorted({v.ns for v in self.pg_types.values() if v.is_user_defined})
         )
+
+    @cached_property
+    def normalized_schema_import(self):
+        return tuple(normalize_name(n) for n in self.schema_import)

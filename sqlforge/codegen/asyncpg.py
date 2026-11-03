@@ -38,22 +38,22 @@ from .structures import (
     Schema,
 )
 
+_MODULES = (
+    "asyncpg",
+    "datetime",
+    "decimal",
+    "enum",
+    "ipaddress",
+    "msgspec",
+    "typing",
+    "uuid",
+)
+
 
 class AsyncpgCodegen:
     def __init__(self, pg_types: PGTypeRegister):
         self.ctx = DriverCtx(
-            pg_types,
-            {oid: _python_type(oid, pg_types) for oid in pg_types},
-            [
-                "asyncpg",
-                "datetime",
-                "decimal",
-                "enum",
-                "ipaddress",
-                "msgspec",
-                "typing",
-                "uuid",
-            ],
+            pg_types, {oid: _python_type(oid, pg_types) for oid in pg_types}, _MODULES
         )
         self._schema = SchemaCodegen(self.ctx)
 
@@ -71,23 +71,27 @@ class AsyncpgCodegen:
         ]
 
     def _file_content(self, sqls: list[AnalyzedSQL]):
-        txt = (
+        body = Text()
+        for fn in _fn_writer(sqls):
+            body.add(fn).newline()
+
+        imports = (
             Text("from __future__ import annotations")
             .newline()
             .newline()
-            .import_("asyncpg", "datetime", "decimal", "ipaddress", "typing", "uuid")
+            .import_(*_MODULES, keep=lambda m: f"{m}." in str(body))
             .newline()
-            .import_from("collections.abc", "Iterable")
-            .import_schemas(
-                f"{'.' * sqls[0].origin.depth}schema", self.ctx.schema_import
+            .import_from(
+                "collections.abc", "Iterable", keep=lambda _: "Iterable[" in body
+            )
+            .import_from(
+                f"{'.' * sqls[0].origin.depth}schema",
+                *self.ctx.normalized_schema_import,
+                keep=lambda m: f"{m}." in body,
             )
         )
 
-        txt.newline()
-        for fn in _fn_writer(sqls):
-            txt.add(fn).newline()
-
-        return txt
+        return imports.newline().add(body)
 
 
 def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:

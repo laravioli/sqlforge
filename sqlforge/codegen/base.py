@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable
 
-from sqlforge.utils import camel_case, normalize_name
+from sqlforge.utils import camel_case
 
 # Base
 
@@ -23,20 +23,24 @@ class Text:
         self._string += "    "
         return self
 
-    def import_(self, *module: str):
+    def import_(self, *module: str, keep: None | Callable[[str], bool] = None):
+        if keep is not None:
+            module = tuple(m for m in module if keep(m))
         for m in module:
             self._string += f"import {m}\n"
         return self
 
-    def import_from(self, module: str, *objs: str):
-        self._string += f"from {module} import {', '.join(objs)}\n"
+    def import_from(
+        self, module: str, *objs: str, keep: None | Callable[[str], bool] = None
+    ):
+        if keep is not None:
+            objs = tuple(o for o in objs if keep(o))
+        if objs:
+            self._string += f"from {module} import {', '.join(objs)}\n"
         return self
 
-    def import_schemas(self, package: str, nss: Iterable[str]) -> Text:
-        """from ..schema import my_app, public"""
-        if names := [normalize_name(ns) for ns in nss]:
-            self.import_from(package, *names)
-        return self
+    def __contains__(self, item: str) -> bool:
+        return item in self._string
 
     def __repr__(self):
         return self._string

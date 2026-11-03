@@ -17,22 +17,22 @@ class SchemaCodegen:
         self.ctx = ctx
 
     def gen(self, ns: str):
-        txt = (
+        body = Text()
+        for pg_text in self._writer(ns):
+            body.add(pg_text).newline()
+
+        imports = (
             Text()
             .import_from("__future__", "annotations")
-            .import_(*self.ctx.default_import)
+            .import_(*self.ctx.default_import, keep=lambda m: f"{m}." in body)
+            .import_from(
+                ".",
+                *self.ctx.normalized_schema_import,
+                keep=lambda m: f"{m}." in str(body) and m != normalize_name(ns),
+            )
         )
 
-        schema_import = [n for n in self.ctx.schema_import if n != ns]
-        if schema_import:
-            txt.import_from(".", ", ".join(normalize_name(sc) for sc in schema_import))
-
-        txt.newline()
-
-        for pg_text in self._writer(ns):
-            txt.add(pg_text).newline()
-
-        return txt
+        return imports.newline().add(body)
 
     def _writer(self, ns: str):
         for pg_type in (v for v in self.ctx.pg_types.values() if v.ns == ns):
