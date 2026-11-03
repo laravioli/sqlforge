@@ -50,7 +50,7 @@ class SQL:
             self.kind,
             expr,
             params,
-            expr.sql(dialect="postgres"),
+            expr.sql(dialect="postgres", pretty=True, copy=False),
         )
 
 

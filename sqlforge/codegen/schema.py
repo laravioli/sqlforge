@@ -4,45 +4,31 @@ from sqlforge.introspection.structures import (
     CompositeType,
     DomainType,
     EnumType,
-    Oid,
     PGAttribute,
     PGTypeRegister,
 )
 
 from .base import DomainText, EnumText, StructText, Text
-from .structures import PYTHON_ANY, PythonType
+from .structures import PYTHON_ANY, DriverCtx
 from .utils import camel_case, isidentifier
 
 
 class SchemaCodegen:
-    def __init__(
-        self,
-        pg_reg: PGTypeRegister,
-        python_reg: dict[Oid, PythonType],
-    ):
-        self.pg_reg = pg_reg
-        self.python_reg = python_reg
+    def __init__(self, ctx: DriverCtx):
+        self.ctx = ctx
 
-    def generate_schema(self, ns: str):
+    def gen(self, ns: str):
         txt = (
             Text()
             .import_from("__future__", "annotations")
-            .import_(
-                "asyncpg",
-                "datetime",
-                "decimal",
-                "enum",
-                "ipaddress",
-                "typing",
-                "uuid",
-                "msgspec",
-            )
+            .import_(*self.ctx.default_import)
         )
 
-        nss = get_user_schema_names(self.pg_reg)
-        nss.remove(ns)
-        if nss:
-            txt.import_from(".", ", ".join(nss))
+        schema_import = [n for n in self.ctx.schema_import if n != ns]
+        if schema_import:
+            txt.import_from(
+                ".", ", ".join(self.ctx.normalize(sc) for sc in schema_import)
+            )
 
         txt.newline()
 
@@ -52,8 +38,8 @@ class SchemaCodegen:
         return txt
 
     def _writer(self, ns: str):
-        for pg_type in (v for v in self.pg_reg.values() if v.ns == ns):
-            if not isidentifier(camel_case(pg_type.name)):
+        for pg_type in (v for v in self.ctx.pg_types.values() if v.ns == ns):
+            if not isidentifier(camel_case(pg_type.name)):  # Any
                 continue
             match pg_type:
                 case CompositeType():
@@ -79,10 +65,9 @@ class SchemaCodegen:
             )
         return txt
 
-    def _hint(self, attr: PGAttribute, ns: str) -> str:
-        pt = self.python_reg[attr.attr_type]
-        hint = pt.hint if pt.ns == ns else pt.qualified_hint
-        return f"{hint} | None" if attr.nullable and pt is not PYTHON_ANY else hint
+    def _domain(self, domain: DomainType, ns: str):
+        pt = self.ctx.python_types[domain.basetype]
+        return DomainText(domain.name, pt.hint if pt.ns == ns else pt.qualified_hint)
 
     def _enum(self, enum: EnumType):
         txt = EnumText(enum.name)
@@ -90,9 +75,10 @@ class SchemaCodegen:
             txt.add_value(name, value)
         return txt
 
-    def _domain(self, domain: DomainType, ns: str):
-        pt = self.python_reg[domain.basetype]
-        return DomainText(domain.name, pt.hint if pt.ns == ns else pt.qualified_hint)
+    def _hint(self, attr: PGAttribute, ns: str) -> str:
+        pt = self.ctx.python_types[attr.attr_type]
+        hint = pt.hint if pt.ns == ns else pt.qualified_hint
+        return f"{hint} | None" if attr.nullable and pt is not PYTHON_ANY else hint
 
 
 def get_user_schema_names(pg_type_register: PGTypeRegister):
@@ -101,14 +87,13 @@ def get_user_schema_names(pg_type_register: PGTypeRegister):
 
 def _member_names(labels: list[str]) -> list[str]:
     names: list[str] = []
-    for label in labels:
-        name = re.sub(r"\W+", "_", label.upper()).strip("_")
-        if not name.isidentifier():  # "", "1ST"
-            name = f"_{name}"
-        if not name.isidentifier():  # exotic unicode left over
-            name = f"_{len(names)}"
-        unique, i = name, 2
-        while unique in names:
-            unique, i = f"{name}_{i}", i + 1
+    for i, label in enumerate(labels):
+        base = re.sub(r"\W+", "_", label.upper()).strip("_")
+        name = next(
+            n for n in (base, f"_{base}", f"_{i}") if n.isidentifier() and n != "_"
+        )
+        unique, k = name, 2
+        while unique in names:  # "a" and "A" -> A, A_2
+            unique, k = f"{name}_{k}", k + 1
         names.append(unique)
     return names

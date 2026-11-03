@@ -9,9 +9,8 @@ import asyncpg
 from asyncpg.prepared_stmt import PreparedStatement
 from sqlglot import exp
 
-from sqlforge.codegen.asyncpg import PythonTypeRegister, generate, python_types
-from sqlforge.codegen.schema import SchemaCodegen, get_user_schema_names
-from sqlforge.codegen.structures import File, Output, Schema
+from sqlforge.codegen.asyncpg import AsyncpgCodegen
+from sqlforge.codegen.structures import Output, PythonTypeRegister
 from sqlforge.codegen.utils import isidentifier
 from sqlforge.config import Config
 from sqlforge.drivers import Driver
@@ -36,21 +35,11 @@ class AsyncPGDriver(Driver):
     async def pipeline(self, sqls: list[SQL]) -> list[Output]:
         queries = self._transform(sqls)
         prep_queries = await self._prepare(queries)
-        pg_type_register = await self.fetcher.get_type_register(
-            _get_stmt_oids(prep_queries)
-        )
-        python_type_register = python_types(register=pg_type_register)
-        typed_queries = self._convert(prep_queries, python_type_register)
-        final = Engine.from_register(pg_type_register, typed_queries).analyze()
-        nss = get_user_schema_names(pg_type_register)
+        pg_types = await self.fetcher.get_type_register(_get_stmt_oids(prep_queries))
+        codegen = AsyncpgCodegen(pg_types)
+        typed_queries = self._convert(prep_queries, codegen.ctx.python_types)
 
-        return [
-            *Schema.makes(
-                nss,
-                SchemaCodegen(pg_type_register, python_type_register).generate_schema,
-            ),
-            *File.makes(final, nss, generate),
-        ]
+        return codegen.gen(Engine.from_register(pg_types, typed_queries).analyze())
 
     @classmethod
     async def run(cls, cfg: Config, sqls: list[SQL]):

@@ -1,92 +1,58 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import cached_property, partial
+from functools import cached_property
 from pathlib import Path
 from typing import Protocol
 
 from sqlforge.inference.structures import AnalyzedSQL
+from sqlforge.introspection.structures import Oid, PGTypeRegister
 
-from .base import HINT_ANY, Text
+from .base import Text
+from .utils import HINT_ANY
 
 
 class Output(Protocol):
     @property
     def out(self) -> Path: ...
 
-    def gen(self) -> Text: ...
+    @property
+    def content(self) -> Text: ...
 
 
 @dataclass(frozen=True, slots=True)
 class File:
     src: Path
     file: Path
-    sqls: list[AnalyzedSQL]
-    _gen: Callable[[File, str | None], Text]
-    _schema_import: str | None
-
-    @property
-    def folder(self):
-        return self.file.parent
-
-    @property
-    def filename(self):
-        return self.file.name
+    content: Text
 
     @property
     def out(self):
         return self.file.with_suffix(".py").relative_to(self.src.parent)
 
-    @property
-    def depth(self):
-        return len(self.out.parts)
-
-    def gen(self):
-        return self._gen(self, self._schema_import)
-
-    @classmethod
-    def makes(
-        cls,
-        sqls: list[AnalyzedSQL],
-        nss: Sequence[str],
-        gen: Callable[[File, str | None], Text],
-    ) -> list[File]:
+    @staticmethod
+    def groups(sqls: list[AnalyzedSQL]):
         groups: dict[Path, list[AnalyzedSQL]] = defaultdict(list)
-        schema_import = ", ".join(nss) if nss else None
 
         for sql in sqls:
             groups[sql.origin.file].append(sql)
 
-        return [
-            cls(
-                src=g[0].origin.src,
-                file=file,
-                sqls=g,
-                _gen=gen,
-                _schema_import=schema_import,
-            )
-            for file, g in groups.items()
-        ]
+        return groups
 
 
 @dataclass(frozen=True, slots=True)
 class Schema:
     out: Path
-    _gen: Callable
-
-    def gen(self):
-        return self._gen()
+    content: Text
 
     @classmethod
-    def makes(cls, nss: Sequence[str], gen: Callable[[str], Text]) -> list[Schema]:
-        return [
-            cls(out=Path("schema") / f"{sc}.py", _gen=partial(gen, sc)) for sc in nss
-        ]
+    def make(cls, ns: str, content: Text) -> Schema:
+        return cls(Path("schema") / f"{ns}.py", content)
 
 
 type PythonType = PythonRegularType | PythonArrayType | PythonRangeType
+type PythonTypeRegister = dict[Oid, PythonType]
 
 
 @dataclass(frozen=True)
@@ -137,3 +103,19 @@ class PythonRangeType:
     @cached_property
     def ns(self):
         return self.inner.ns
+
+
+@dataclass(frozen=True)
+class DriverCtx:
+    pg_types: PGTypeRegister
+    python_types: PythonTypeRegister
+    default_import: list[str]
+
+    @cached_property
+    def schema_import(self):
+        return tuple(
+            sorted({v.ns for v in self.pg_types.values() if v.is_user_defined})
+        )
+
+    def normalize(self, imp: str):
+        return imp

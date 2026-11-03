@@ -95,3 +95,6 @@ select * from user_base ub left join user_preference up on true;
 
 --name: test_email:one
 SELECT '1'::email;
+
+--name: test_escape:one
+SELECT 'C:\new\table' AS path;

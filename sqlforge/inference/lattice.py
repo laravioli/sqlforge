@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlforge.codegen.base import HINT_ANY
+from sqlforge.codegen.utils import HINT_ANY
 
 
 @dataclass(frozen=True, slots=True)

@@ -24,20 +24,85 @@ from sqlforge.introspection.structures import (
 from sqlforge.structures import QueryKind
 
 from .base import BodyText, FnParamText, FnReturnText, FnText, Text
+from .schema import SchemaCodegen
 from .structures import (
     PYTHON_ANY,
+    DriverCtx,
     File,
+    Output,
     PythonArrayType,
     PythonRangeType,
     PythonRegularType,
     PythonType,
+    PythonTypeRegister,
+    Schema,
 )
-from .utils import camel_case, isidentifier
-
-type PythonTypeRegister = dict[Oid, PythonType]
+from .utils import camel_case, isidentifier, relative_import_depth
 
 
-def type_name(t) -> str:
+class AsyncpgCodegen:
+    def __init__(self, pg_types: PGTypeRegister):
+        self.ctx = DriverCtx(
+            pg_types,
+            python_types(pg_types),
+            [
+                "asyncpg",
+                "datetime",
+                "decimal",
+                "enum",
+                "ipaddress",
+                "msgspec",
+                "typing",
+                "uuid",
+            ],
+        )
+        self.schema = SchemaCodegen(self.ctx)
+
+    def gen(self, sqls: list[AnalyzedSQL]) -> list[Output]:
+        schemas: list[Schema] = []
+        for sc in self.ctx.schema_import:
+            scn = self.ctx.normalize(sc)
+            schemas.append(Schema.make(scn, self.schema.gen(sc)))
+
+        files: list[File] = []
+        for filepath, fs in File.groups(sqls).items():
+            src = fs[0].origin.src
+            files.append(
+                File(
+                    src,
+                    filepath,
+                    self._file_content(fs, relative_import_depth(src, filepath)),
+                )
+            )
+
+        return [*schemas, *files]
+
+    def _file_content(self, sqls: list[AnalyzedSQL], depth: int):
+        txt = (
+            Text("from __future__ import annotations")
+            .newline()
+            .newline()
+            .import_("asyncpg")
+            .import_("datetime")
+            .import_("decimal")
+            .import_("ipaddress")
+            .import_("typing")
+            .import_("uuid")
+            .newline()
+            .import_from("collections.abc", "Iterable")
+        )
+        if self.ctx.schema_import:
+            schema_import = [self.ctx.normalize(sc) for sc in self.ctx.schema_import]
+            txt.import_from(f"{'.' * depth}schema", *schema_import)
+
+        txt.newline()
+        for fn in _fn_writer(sqls):
+            txt.add(fn).newline()
+
+        return txt
+
+
+def _type_name(t) -> str:
     match t:
         case type() if (
             t.__module__.startswith("asyncpg")
@@ -53,7 +118,7 @@ def type_name(t) -> str:
             return name if module == "builtins" else f"{module}.{name}"
 
         case UnionType():
-            return " | ".join(type_name(arg) for arg in get_args(t))
+            return " | ".join(_type_name(arg) for arg in get_args(t))
 
         case str():
             return t
@@ -63,7 +128,7 @@ def type_name(t) -> str:
 
 
 PG_BASE_TYPE: dict[str, str] = {
-    k: type_name(v)
+    k: _type_name(v)
     for k, v in {
         "record": asyncpg.Record,
         "bit": asyncpg.BitString,
@@ -150,34 +215,10 @@ def python_types(register: PGTypeRegister) -> PythonTypeRegister:
     return {oid: python_type(oid, register) for oid in register}
 
 
-def generate(file: File, schema_import: str | None):
-    txt = (
-        Text("from __future__ import annotations")
-        .newline()
-        .newline()
-        .import_("asyncpg")
-        .import_("datetime")
-        .import_("decimal")
-        .import_("ipaddress")
-        .import_("typing")
-        .import_("uuid")
-        .newline()
-        .import_from("collections.abc", "Iterable")
-    )
-    if schema_import:
-        txt.import_from(f"{'.' * file.depth}schema", schema_import)
-
-    txt.newline()
-    for fn in _fn_writer(file.sqls):
-        txt.add(fn).newline()
-
-    return txt
-
-
 def _fn_writer(sqls: list[AnalyzedSQL]):
     for sql in sqls:
         txt = (
-            Text(f"{sql.source.name.upper()} : typing.Final[str] = {sql.source.text!r}")
+            Text(f"{sql.name.upper()}: typing.Final[str] = {sql.source.text!r}")
             .newline()
             .newline()
         )
@@ -239,7 +280,7 @@ def _one(sql: AnalyzedSQL):
         _call("fetchrow", sql, "timeout=timeout", "record_class=record_class")
     )
     return_ = FnReturnText().add(f"{_row(t[1] for t in sql.typed_attrs)} | None")
-    return FnText(sql.source.name.lower(), params, body, return_).gen()
+    return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
 def _many(sql: AnalyzedSQL):
@@ -263,7 +304,7 @@ def _many(sql: AnalyzedSQL):
     params = _build_fn_params(sql)
     body = BodyText(_call("fetch", sql, "timeout=timeout", "record_class=record_class"))
     return_ = FnReturnText().add(f"list[{_row(t[1] for t in sql.typed_attrs)}]")
-    return FnText(sql.name.lower(), params, body, return_).gen()
+    return FnText(sql.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
 def _fetchval(sql: AnalyzedSQL):
@@ -290,7 +331,7 @@ def _fetchval(sql: AnalyzedSQL):
         dict.fromkeys(t[1] for t in sql.typed_attrs)
     )  # distinct types, in column order
     return_ = FnReturnText().add(" | ".join([*values, "None"]))
-    return FnText(sql.source.name.lower(), params, body, return_).gen()
+    return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
 def _fetchmany(sql: AnalyzedSQL):
@@ -327,7 +368,7 @@ def _fetchmany(sql: AnalyzedSQL):
         f"return await conn.fetchmany({sql.source.name.upper()}, args, timeout=timeout, record_class=record_class)"
     )
     return_ = FnReturnText().add(f"list[{_row(t[1] for t in sql.typed_attrs)}]")
-    return FnText(sql.source.name.lower(), params, body, return_).gen()
+    return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
 def _exec(sql: AnalyzedSQL):
@@ -375,7 +416,7 @@ def _exec(sql: AnalyzedSQL):
     params = _build_fn_params(sql, record_class=False)
     body = BodyText(_call("execute", sql, "timeout=timeout"))
     return_ = FnReturnText().add("str")
-    return FnText(sql.source.name.lower(), params, body, return_).gen()
+    return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
 def _execmany(sql: AnalyzedSQL):
@@ -399,7 +440,7 @@ def _execmany(sql: AnalyzedSQL):
         f"return await conn.executemany({sql.source.name.upper()}, args, timeout=timeout)"
     )
     return_ = FnReturnText().add("None")
-    return FnText(sql.source.name.lower(), params, body, return_).gen()
+    return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
 def _row(types: Iterable[str]) -> str:
@@ -410,3 +451,13 @@ def _row(types: Iterable[str]) -> str:
 def _call(method: str, sql: AnalyzedSQL, *extra: str) -> str:
     args = [sql.source.name.upper(), *sql.typed_params.keys(), *extra]
     return f"return await conn.{method}({', '.join(args)})"
+
+
+def _doc(sql: AnalyzedSQL) -> str:
+    """the query as a raw docstring, in a ```sql block for IDE hovers;
+    none if it contains \"\"\" (that would end it)"""
+    text = sql.source.text
+    if '"""' in text:
+        return ""
+    body = text.expandtabs().replace("\n", "\n    ")
+    return 'r"""\n    ```\n    ' + body + '\n    ```\n    """'

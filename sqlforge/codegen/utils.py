@@ -1,5 +1,8 @@
 import keyword
 import re
+from pathlib import Path
+
+HINT_ANY = "typing.Any"
 
 _INVALID = re.compile(r"\W")
 
@@ -23,3 +26,8 @@ def camel_case(s: str):
 
 def isidentifier(ident: str) -> bool:
     return ident.isidentifier() and not keyword.iskeyword(ident)
+
+
+def relative_import_depth(src: Path, file: Path) -> int:
+    out = file.with_suffix(".py").relative_to(src.parent)
+    return len(out.parts)

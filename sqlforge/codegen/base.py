@@ -4,8 +4,6 @@ from .utils import camel_case
 
 # Base
 
-HINT_ANY = "typing.Any"
-
 
 class Text:
     def __init__(self, string: str = ""):
@@ -111,11 +109,13 @@ class FnText(Text):
         body: BodyText,
         return_: FnReturnText | None = None,
         async_=True,
+        doc="",
     ):
         self._string = f"{'async def ' if async_ else 'def '}{name}"
         self.param = param
         self.body = body
         self.return_ = return_
+        self.doc = doc
 
     def gen(self):
         return (
@@ -124,6 +124,7 @@ class FnText(Text):
             .add(":")
             .newline()
             .indent()
+            .add(f"{self.doc}\n    " if self.doc else "")
             .add(self.body)
             .newline()
         )
