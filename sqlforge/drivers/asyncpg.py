@@ -11,17 +11,13 @@ from sqlglot import exp
 
 from sqlforge.codegen.asyncpg import AsyncpgCodegen
 from sqlforge.codegen.structures import Output, PythonTypeRegister
-from sqlforge.codegen.utils import isidentifier
 from sqlforge.config import Config
 from sqlforge.drivers import Driver
 from sqlforge.errors import DriverError
 from sqlforge.inference.engine import Engine
 from sqlforge.introspection.fetch import Fetcher
-from sqlforge.structures import (
-    SQL,
-    TransformedSQL,
-    TypedSQL,
-)
+from sqlforge.structures import SQL, QueryKind, TransformedSQL, TypedSQL
+from sqlforge.utils import isidentifier
 
 
 class AsyncPGDriver(Driver):
@@ -60,8 +56,10 @@ class AsyncPGDriver(Driver):
                 stmt = await self.conn.prepare(
                     sql.text
                 )  # NOTE: could use a pool for perf
-            except asyncpg.PostgresError as e:
+            except _PREPARE_ERRORS as e:
                 raise DriverError(f"{sql.origin}: {e}") from e
+            if not stmt.get_attributes() and sql.kind not in _NO_ROWS:
+                raise DriverError(f"{sql.origin}: returns no column, use :exec")
 
             stmts.append(stmt)
 
@@ -101,6 +99,12 @@ def _t(sql: SQL):
 
 
 # Prepare
+_PREPARE_ERRORS = (
+    asyncpg.PostgresError,
+    asyncpg.InterfaceError,
+    asyncpg.InternalClientError,
+)
+_NO_ROWS = (QueryKind.EXEC, QueryKind.EXECMANY)
 
 
 @dataclass(frozen=True)

@@ -34,10 +34,8 @@ def load_sql(cfg: Config) -> list[SQL]:
 
 
 def _load_from_source(src: Path) -> list[SQL]:
-    if src.is_file():
-        return _load_file(src, src)
-
-    return [sql for f in sorted(src.rglob("*.sql")) for sql in _load_file(src, f)]
+    files = _validate_files(src, [src] if src.is_file() else sorted(src.rglob("*.sql")))
+    return [sql for f in files for sql in _load_file(src, f)]
 
 
 def _load_file(src: Path, file: Path) -> list[SQL]:
@@ -46,9 +44,9 @@ def _load_file(src: Path, file: Path) -> list[SQL]:
     except (ParseError, TokenError, UnicodeDecodeError) as e:
         raise LoaderError(f"{file}: {e}") from e
 
-    exprs = [e for e in exprs if e is not None]
+    exprs = [e for e in exprs if e is not None and not isinstance(e, exp.Semicolon)]
     sqls = [_load_query(e, Origin(src, file, i)) for i, e in enumerate(exprs)]
-    _check_dup_name(file, sqls)
+    _check_fn_dup_name(file, sqls)
 
     return sqls
 
@@ -62,9 +60,9 @@ def _load_query(expr: exp.Expr, origin: Origin):
         if match := META_PATTERN.fullmatch(com.strip()):  # match the first meta_pattern
             target.comments = []
             return SQL(
-                name=_validate_name(match["name"], origin),
+                name=_validate_fn_name(match["name"], origin),
                 origin=origin,
-                kind=_validate_kind(match["kind"], origin),
+                kind=_validate_fn_kind(match["kind"], origin),
                 expr=expr,
             )
 
@@ -76,13 +74,22 @@ def _load_query(expr: exp.Expr, origin: Origin):
 # Validation
 
 
-def _validate_name(name: str, origin: Origin):
+def _validate_files(src: Path, files: list[Path]):
+    for file in files:
+        parts = file.relative_to(src.parent).with_suffix("").parts
+        if not all(n.isidentifier() and not iskeyword(n) for n in parts):
+            raise LoaderError(f"{file}: {'.'.join(parts)} is not an importable module")
+
+    return files
+
+
+def _validate_fn_name(name: str, origin: Origin):
     if not name.isidentifier() or iskeyword(name.lower()):
         raise LoaderError(f"{origin}: {name!r} is not a valid function name")
     return name
 
 
-def _validate_kind(kind: str, origin: Origin):
+def _validate_fn_kind(kind: str, origin: Origin):
     try:
         query_kind = QueryKind(kind)
     except ValueError:
@@ -93,7 +100,7 @@ def _validate_kind(kind: str, origin: Origin):
     return query_kind
 
 
-def _check_dup_name(filepath: Path, sqls: list[SQL]):
+def _check_fn_dup_name(filepath: Path, sqls: list[SQL]):
     seen = set()
     for sql in sqls:
         name = sql.name.lower()

@@ -31,6 +31,10 @@ class Origin:
     def __str__(self) -> str:
         return f"{self.file} (statement {self.index + 1})"
 
+    @property
+    def depth(self) -> int:
+        return len(self.file.relative_to(self.src.parent).parts)
+
 
 @dataclass(frozen=True, slots=True)
 class SQL:

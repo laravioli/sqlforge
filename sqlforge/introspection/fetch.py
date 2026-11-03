@@ -100,7 +100,7 @@ class Fetcher:
                     )
 
                 case TypeKind.ENUM:
-                    values = enums[rec["oid"]]
+                    values = enums.get(rec["oid"], [])
 
                     register[rec["oid"]] = EnumType.convert(
                         rec,

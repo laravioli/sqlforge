@@ -8,9 +8,9 @@ from typing import Protocol
 
 from sqlforge.inference.structures import AnalyzedSQL
 from sqlforge.introspection.structures import Oid, PGTypeRegister
+from sqlforge.utils import normalize_name
 
 from .base import Text
-from .utils import HINT_ANY
 
 
 class Output(Protocol):
@@ -48,7 +48,7 @@ class Schema:
 
     @classmethod
     def make(cls, ns: str, content: Text) -> Schema:
-        return cls(Path("schema") / f"{ns}.py", content)
+        return cls(Path("schema") / f"{normalize_name(ns)}.py", content)
 
 
 type PythonType = PythonRegularType | PythonArrayType | PythonRangeType
@@ -62,10 +62,14 @@ class PythonRegularType:
 
     @cached_property
     def qualified_hint(self):
-        return f"{self.ns}.{self.hint}" if self.ns is not None else self.hint
+        return (
+            f"{normalize_name(self.ns)}.{self.hint}"
+            if self.ns is not None
+            else self.hint
+        )
 
 
-PYTHON_ANY = PythonRegularType(hint=HINT_ANY)
+PYTHON_ANY = PythonRegularType(hint="typing.Any")
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,3 @@ class DriverCtx:
         return tuple(
             sorted({v.ns for v in self.pg_types.values() if v.is_user_defined})
         )
-
-    def normalize(self, imp: str):
-        return imp

@@ -22,6 +22,7 @@ from sqlforge.introspection.structures import (
     TypeKind,
 )
 from sqlforge.structures import QueryKind
+from sqlforge.utils import camel_case, isidentifier
 
 from .base import BodyText, FnParamText, FnReturnText, FnText, Text
 from .schema import SchemaCodegen
@@ -34,17 +35,15 @@ from .structures import (
     PythonRangeType,
     PythonRegularType,
     PythonType,
-    PythonTypeRegister,
     Schema,
 )
-from .utils import camel_case, isidentifier, relative_import_depth
 
 
 class AsyncpgCodegen:
     def __init__(self, pg_types: PGTypeRegister):
         self.ctx = DriverCtx(
             pg_types,
-            python_types(pg_types),
+            {oid: _python_type(oid, pg_types) for oid in pg_types},
             [
                 "asyncpg",
                 "datetime",
@@ -56,50 +55,71 @@ class AsyncpgCodegen:
                 "uuid",
             ],
         )
-        self.schema = SchemaCodegen(self.ctx)
+        self._schema = SchemaCodegen(self.ctx)
 
     def gen(self, sqls: list[AnalyzedSQL]) -> list[Output]:
-        schemas: list[Schema] = []
-        for sc in self.ctx.schema_import:
-            scn = self.ctx.normalize(sc)
-            schemas.append(Schema.make(scn, self.schema.gen(sc)))
-
-        files: list[File] = []
-        for filepath, fs in File.groups(sqls).items():
-            src = fs[0].origin.src
-            files.append(
+        return [
+            *[Schema.make(sc, self._schema.gen(sc)) for sc in self.ctx.schema_import],
+            *[
                 File(
-                    src,
+                    fs[0].origin.src,
                     filepath,
-                    self._file_content(fs, relative_import_depth(src, filepath)),
+                    self._file_content(fs),
                 )
-            )
+                for filepath, fs in File.groups(sqls).items()
+            ],
+        ]
 
-        return [*schemas, *files]
-
-    def _file_content(self, sqls: list[AnalyzedSQL], depth: int):
+    def _file_content(self, sqls: list[AnalyzedSQL]):
         txt = (
             Text("from __future__ import annotations")
             .newline()
             .newline()
-            .import_("asyncpg")
-            .import_("datetime")
-            .import_("decimal")
-            .import_("ipaddress")
-            .import_("typing")
-            .import_("uuid")
+            .import_("asyncpg", "datetime", "decimal", "ipaddress", "typing", "uuid")
             .newline()
             .import_from("collections.abc", "Iterable")
+            .import_schemas(
+                f"{'.' * sqls[0].origin.depth}schema", self.ctx.schema_import
+            )
         )
-        if self.ctx.schema_import:
-            schema_import = [self.ctx.normalize(sc) for sc in self.ctx.schema_import]
-            txt.import_from(f"{'.' * depth}schema", *schema_import)
 
         txt.newline()
         for fn in _fn_writer(sqls):
             txt.add(fn).newline()
 
         return txt
+
+
+def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:
+
+    match pg_types[oid]:
+        case ArrayType(elemtype=elem):
+            return PythonArrayType(_python_type(elem, pg_types))
+
+        case RangeType(kind=kind, range_subtype=sub):
+            return PythonRangeType(
+                _python_type(sub, pg_types), kind is TypeKind.MULTI_RANGE
+            )
+
+        case CompositeType() | DomainType() | EnumType() as t if t.is_user_defined:
+            name = camel_case(t.name)
+            if isidentifier(name):
+                return PythonRegularType(name, t.ns)
+            if isinstance(t, DomainType):
+                return _python_type(
+                    t.basetype, pg_types
+                )  # no alias generated: base type
+            return PYTHON_ANY  # "my-table", "Weird Type"
+
+        case DomainType(basetype=base):
+            return _python_type(base, pg_types)
+
+        case BaseType(name=name) | PseudoType(name=name):
+            pg_base = PG_BASE_TYPE.get(name)
+            return PythonRegularType(pg_base) if pg_base is not None else PYTHON_ANY
+
+        case _:  # system composite types
+            return PYTHON_ANY
 
 
 def _type_name(t) -> str:
@@ -130,7 +150,7 @@ def _type_name(t) -> str:
 PG_BASE_TYPE: dict[str, str] = {
     k: _type_name(v)
     for k, v in {
-        "record": asyncpg.Record,
+        "record": asyncpg.Record | tuple,
         "bit": asyncpg.BitString,
         "varbit": asyncpg.BitString,
         "bool": bool,
@@ -178,41 +198,6 @@ PG_BASE_TYPE: dict[str, str] = {
         "cid": int,
     }.items()
 }
-
-
-def python_type(oid: Oid, register: PGTypeRegister) -> PythonType:
-    match register[oid]:
-        case ArrayType(elemtype=elem):
-            return PythonArrayType(python_type(elem, register))
-
-        case RangeType(kind=kind, range_subtype=sub):
-            return PythonRangeType(
-                python_type(sub, register), kind is TypeKind.MULTI_RANGE
-            )
-
-        case CompositeType() | DomainType() | EnumType() as t if t.is_user_defined:
-            name = camel_case(t.name)
-            if isidentifier(name):
-                return PythonRegularType(name, t.ns)
-            if isinstance(t, DomainType):
-                return python_type(
-                    t.basetype, register
-                )  # no alias generated: base type
-            return PYTHON_ANY  # "my-table", "Weird Type"
-
-        case DomainType(basetype=base):
-            return python_type(base, register)
-
-        case BaseType(name=name) | PseudoType(name=name):
-            pg_base = PG_BASE_TYPE.get(name)
-            return PythonRegularType(pg_base) if pg_base is not None else PYTHON_ANY
-
-        case _:  # system composite types
-            return PYTHON_ANY
-
-
-def python_types(register: PGTypeRegister) -> PythonTypeRegister:
-    return {oid: python_type(oid, register) for oid in register}
 
 
 def _fn_writer(sqls: list[AnalyzedSQL]):
@@ -454,7 +439,7 @@ def _call(method: str, sql: AnalyzedSQL, *extra: str) -> str:
 
 
 def _doc(sql: AnalyzedSQL) -> str:
-    """the query as a raw docstring, in a ```sql block for IDE hovers;
+    """the query as a raw docstring, in a ``` block for IDE hovers;
     none if it contains \"\"\" (that would end it)"""
     text = sql.source.text
     if '"""' in text:

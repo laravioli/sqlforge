@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlforge.codegen.utils import HINT_ANY
-
 
 @dataclass(frozen=True, slots=True)
 class Nullability:
@@ -15,11 +13,11 @@ class Nullability:
         return not (self.may_null or self.may_value)
 
     def python(self, base: str) -> str:
-        if base == HINT_ANY:
+        if base == "typing.Any":
             return base
 
         if self.is_bottom:
-            return "Never"
+            return "typing.Never"
 
         if not self.may_value:
             return "None"
