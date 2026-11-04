@@ -1,12 +1,4 @@
-import datetime
-import decimal
-import ipaddress
 from collections.abc import Iterable
-from types import UnionType
-from typing import get_args
-from uuid import UUID
-
-import asyncpg
 
 from sqlforge.inference.structures import AnalyzedSQL
 from sqlforge.introspection.structures import (
@@ -79,7 +71,7 @@ class AsyncpgCodegen:
             Text("from __future__ import annotations")
             .newline()
             .newline()
-            .import_(*_MODULES, keep=lambda m: f"{m}." in str(body))
+            .import_(*_MODULES, keep=lambda m: f"{m}." in body)
             .newline()
             .import_from(
                 "collections.abc", "Iterable", keep=lambda _: "Iterable[" in body
@@ -92,6 +84,55 @@ class AsyncpgCodegen:
         )
 
         return imports.newline().add(body)
+
+
+# Hint
+
+PG_BASE_TYPE: dict[str, str] = {
+    "record": "tuple",
+    "bit": "asyncpg.BitString",
+    "varbit": "asyncpg.BitString",
+    "bool": "bool",
+    "box": "asyncpg.Box",
+    "bytea": "bytes",
+    "char": "bytes",
+    "name": "str",
+    "varchar": "str",
+    "text": "str",
+    "xml": "str",
+    "bpchar": "str",
+    "cidr": "ipaddress.IPv4Network | ipaddress.IPv6Network",
+    "inet": "ipaddress.IPv4Interface | ipaddress.IPv6Interface | ipaddress.IPv4Address | ipaddress.IPv6Address",
+    "macaddr": "str",
+    "macaddr8": "str",
+    "circle": "asyncpg.Circle",
+    "date": "datetime.date",
+    "time": "datetime.time",
+    "timetz": "datetime.time",
+    "timestamp": "datetime.datetime",
+    "timestamptz": "datetime.datetime",
+    "interval": "datetime.timedelta",
+    "float4": "float",
+    "float8": "float",
+    "int2": "int",
+    "int4": "int",
+    "int8": "int",
+    "numeric": "decimal.Decimal",
+    "json": "str",
+    "jsonb": "str",
+    "line": "asyncpg.Line",
+    "lseg": "asyncpg.LineSegment",
+    "money": "str",
+    "path": "asyncpg.Path",
+    "point": "asyncpg.Point",
+    "polygon": "asyncpg.Polygon",
+    "uuid": "uuid.UUID",
+    "tid": "tuple",
+    "oid": "int",
+    "xid": "int",
+    "xid8": "int",
+    "cid": "int",
+}
 
 
 def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:
@@ -126,82 +167,7 @@ def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:
             return PYTHON_ANY
 
 
-def _type_name(t) -> str:
-    match t:
-        case type() if (
-            t.__module__.startswith("asyncpg")
-            and getattr(asyncpg, t.__qualname__, None) is t
-        ):
-            return (
-                f"asyncpg.{t.__qualname__}"  # public name, not the internal module path
-            )
-
-        case type():
-            module = t.__module__
-            name = t.__qualname__
-            return name if module == "builtins" else f"{module}.{name}"
-
-        case UnionType():
-            return " | ".join(_type_name(arg) for arg in get_args(t))
-
-        case str():
-            return t
-
-        case _:
-            raise TypeError(f"Unsupported type: {t!r}")
-
-
-PG_BASE_TYPE: dict[str, str] = {
-    k: _type_name(v)
-    for k, v in {
-        "record": asyncpg.Record | tuple,
-        "bit": asyncpg.BitString,
-        "varbit": asyncpg.BitString,
-        "bool": bool,
-        "box": asyncpg.Box,
-        "bytea": bytes,
-        "char": bytes,
-        "name": str,
-        "varchar": str,
-        "text": str,
-        "xml": str,
-        "bpchar": str,
-        "cidr": ipaddress.IPv4Network | ipaddress.IPv6Network,
-        "inet": ipaddress.IPv4Interface
-        | ipaddress.IPv6Interface
-        | ipaddress.IPv4Address
-        | ipaddress.IPv6Address,
-        "macaddr": str,
-        "macaddr8": str,
-        "circle": asyncpg.Circle,
-        "date": datetime.date,
-        "time": datetime.time,
-        "timetz": datetime.time,
-        "timestamp": datetime.datetime,
-        "timestamptz": datetime.datetime,
-        "interval": datetime.timedelta,
-        "float4": float,
-        "float8": float,
-        "int2": int,
-        "int4": int,
-        "int8": int,
-        "numeric": decimal.Decimal,
-        "json": str,  # asyncpg returns json / jsonb as str unless you register a codec
-        "jsonb": str,
-        "line": asyncpg.Line,
-        "lseg": asyncpg.LineSegment,
-        "money": str,
-        "path": asyncpg.Path,
-        "point": asyncpg.Point,
-        "polygon": asyncpg.Polygon,
-        "uuid": UUID,
-        "tid": tuple,
-        "oid": int,
-        "xid": int,
-        "xid8": int,
-        "cid": int,
-    }.items()
-}
+# Function
 
 
 def _fn_writer(sqls: list[AnalyzedSQL]):

@@ -28,7 +28,7 @@ class SchemaCodegen:
             .import_from(
                 ".",
                 *self.ctx.normalized_schema_import,
-                keep=lambda m: f"{m}." in str(body) and m != normalize_name(ns),
+                keep=lambda m: f"{m}." in body and m != normalize_name(ns),
             )
         )
 
