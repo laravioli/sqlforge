@@ -7,8 +7,9 @@ from functools import cached_property
 from pathlib import Path
 from typing import Protocol
 
-from sqlforge.inference.structures import AnalyzedSQL
+from sqlforge.inference.structures import AnalyzedSQL, Nullability
 from sqlforge.introspection.structures import Oid, PGTypeRegister
+from sqlforge.structures import TransformedSQL
 from sqlforge.utils import normalize_name
 
 from .base import Text
@@ -125,3 +126,47 @@ class DriverCtx:
     @cached_property
     def normalized_schema_import(self):
         return tuple(normalize_name(n) for n in self.schema_import)
+
+
+@dataclass(frozen=True)
+class TypedSQL:
+    source: TransformedSQL
+    typed_params: dict[str, PythonType]
+    typed_attrs: list[tuple[str, PythonType]]
+    nulls: Sequence[Nullability]
+
+    @cached_property
+    def name(self):
+        return self.source.name
+
+    @cached_property
+    def origin(self):
+        return self.source.origin
+
+    @cached_property
+    def param_hints(self):
+        return {name: pt.qualified_hint for name, pt in self.typed_params.items()}
+
+    @cached_property
+    def result_hints(self):
+        return [
+            null.python(t.qualified_hint)
+            for (_, t), null in zip(self.typed_attrs, self.nulls)
+        ]
+
+    @classmethod
+    def convert(cls, source: AnalyzedSQL, reg: PythonTypeRegister):
+
+        transformed = source.source.source
+        prepared = source.source
+        return TypedSQL(
+            source=transformed,
+            typed_params={
+                p: reg[oid] for p, oid in zip(transformed.params, prepared.param_oids)
+            },
+            typed_attrs=[
+                (name, reg[oid])
+                for name, oid in zip(prepared.result_names, prepared.result_oids)
+            ],
+            nulls=[c.nullability for c in source.analysis.columns],
+        )

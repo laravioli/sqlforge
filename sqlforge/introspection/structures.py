@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import StrEnum
+from functools import cached_property
 from typing import TypedDict
 
 from msgspec import Struct, convert
+
+from sqlforge.structures import TransformedSQL
 
 type Oid = int
 type PGTypeRegister = dict[Oid, PGType]
@@ -117,3 +122,27 @@ class DomainType(PGType):
 
 class EnumType(PGType):
     values: list[str]
+
+
+@dataclass(frozen=True)
+class PreparedSQL:
+    source: TransformedSQL
+    param_oids: Sequence[int]
+    result_oids: Sequence[int]
+    result_names: Sequence[str]
+
+    @property
+    def is_empty(self):
+        return len(self.result_oids) == 0
+
+    @cached_property
+    def oids(self):
+        return set(self.param_oids) | set(self.result_oids)
+
+    @cached_property
+    def name(self):
+        return self.source.name
+
+    @cached_property
+    def origin(self):
+        return self.source.origin

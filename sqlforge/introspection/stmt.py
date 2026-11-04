@@ -2,7 +2,7 @@ import typing
 
 USER_TYPE_OIDS: typing.Final = """\
 SELECT
-    array_agg(t.oid ORDER BY n.nspname, t.typname) AS oids
+    coalesce(array_agg(t.oid ORDER BY n.nspname, t.typname), '{}'::oid[]) AS oids
 FROM 
     pg_catalog.pg_type t
 JOIN 
@@ -148,9 +148,9 @@ GROUP BY
 """
 
 RESULT_TYPES = """\
-SELECT name, result_types::oid[] FROM pg_catalog.pg_prepared_statements
+SELECT name, coalesce(result_types::oid[], '{}'::oid[]) AS result_types
+FROM pg_catalog.pg_prepared_statements
 WHERE name = any($1::text[])
 """
-
 
 # NOTE require PG > 13

@@ -5,8 +5,8 @@ import time
 
 from sqlglot.errors import SqlglotError
 
+from sqlforge.inference.structures import PreparedSQL
 from sqlforge.introspection.structures import PGTypeRegister
-from sqlforge.structures import TypedSQL
 
 from .catalog import Catalog
 from .context import Context
@@ -20,21 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 class Engine:
-    def __init__(self, catalog: Catalog, statements: list[TypedSQL]):
-        self.catalog = catalog
-        self.statements = statements
+    def __init__(self, type_register: PGTypeRegister):
+        self.catalog = Catalog(type_register)
 
-    @staticmethod
-    def from_register(type_register: PGTypeRegister, statements: list[TypedSQL]):
-        return Engine(catalog=Catalog(type_register), statements=statements)
-
-    def analyze(self) -> list[AnalyzedSQL]:
+    def analyze(self, statements: list[PreparedSQL]) -> list[AnalyzedSQL]:
 
         s = time.perf_counter_ns()
-        analyze = [
-            AnalyzedSQL(stmt.source, stmt.typed_params, self.analyze_one(stmt))
-            for stmt in self.statements
-        ]
+        analyze = [AnalyzedSQL(stmt, self.analyze_one(stmt)) for stmt in statements]
         e = time.perf_counter_ns()
         size = len([a for a in analyze if a.analysis.bypassed is False])
         logger.debug(size)
@@ -42,25 +34,23 @@ class Engine:
             logger.debug("time : %f ms", (e - s) / (size * 1000000))
         return analyze
 
-    def analyze_one(self, statement: TypedSQL) -> Analysis:
-        attrs = statement.typed_attrs
-        if not attrs:
+    def analyze_one(self, statement: PreparedSQL) -> Analysis:
+        if statement.is_empty:
             return Analysis(columns=(), bypassed=False)
 
         error, internal = None, False
+        size = len(statement.result_oids)
         try:
             scope = prepare_sql(statement.source, self.catalog.mapping_schema)
             bypassed = False
 
             nulls = Analyzer(Context(), self.catalog).run(scope).result()
-            if len(attrs) != len(nulls):
-                raise Unsupported(
-                    f"{len(nulls)} columns inferred, {len(attrs)} expected"
-                )
+            if size != len(nulls):
+                raise Unsupported(f"{len(nulls)} columns inferred, {size} expected")
 
         except (SqlglotError, Unsupported) as e:
             nulls, bypassed, error = (
-                [MAYBE_NULL] * len(attrs),
+                [MAYBE_NULL] * size,
                 isinstance(e, ByPassed),
                 str(e),
             )
@@ -72,17 +62,14 @@ class Engine:
                 exc_info=e,
             )
             nulls, bypassed, error, internal = (
-                [MAYBE_NULL] * len(attrs),
+                [MAYBE_NULL] * size,
                 False,
                 repr(e),
                 True,
             )
 
         return Analysis(
-            columns=tuple(
-                ColumnResult(name, type_, null)
-                for (name, type_), null in zip(attrs, nulls)
-            ),
+            columns=tuple(ColumnResult(null) for null in nulls),
             bypassed=bypassed,
             error=error,
             internal=internal,

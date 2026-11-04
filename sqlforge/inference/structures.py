@@ -3,20 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import cached_property
 
-from sqlforge.structures import StrAttrName, StrParamName, StrPythonType, TransformedSQL
+from sqlforge.introspection.structures import PreparedSQL
 
 from .lattice import Nullability
 
 
 @dataclass(frozen=True)
 class ColumnResult:
-    name: str
-    type: str
     nullability: Nullability
-
-    @property
-    def python(self) -> str:
-        return self.nullability.python(self.type)
 
 
 @dataclass(frozen=True)
@@ -29,18 +23,13 @@ class Analysis:
 
 @dataclass
 class AnalyzedSQL:
-    source: TransformedSQL
-    typed_params: dict[StrParamName, StrPythonType]
+    source: PreparedSQL
     analysis: Analysis
 
-    @property
+    @cached_property
     def name(self):
         return self.source.name
 
-    @property
+    @cached_property
     def origin(self):
         return self.source.origin
-
-    @cached_property
-    def typed_attrs(self) -> list[tuple[StrAttrName, StrPythonType]]:
-        return [(c.name, c.python) for c in self.analysis.columns]

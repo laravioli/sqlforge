@@ -28,6 +28,7 @@ from .structures import (
     PythonRegularType,
     PythonType,
     Schema,
+    TypedSQL,
 )
 
 _MODULES = (
@@ -56,13 +57,18 @@ class AsyncpgCodegen:
                 File(
                     fs[0].origin.src,
                     filepath,
-                    self._file_content(fs),
+                    self._file_content(
+                        [
+                            TypedSQL.convert(source, self.ctx.python_types)
+                            for source in fs
+                        ]
+                    ),
                 )
                 for filepath, fs in File.groups(sqls).items()
             ],
         ]
 
-    def _file_content(self, sqls: list[AnalyzedSQL]):
+    def _file_content(self, sqls: list[TypedSQL]):
         body = Text()
         for fn in _fn_writer(sqls):
             body.add(fn).newline()
@@ -170,7 +176,7 @@ def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:
 # Function
 
 
-def _fn_writer(sqls: list[AnalyzedSQL]):
+def _fn_writer(sqls: list[TypedSQL]):
     for sql in sqls:
         txt = (
             Text(f"{sql.name.upper()}: typing.Final[str] = {sql.source.text!r}")
@@ -194,15 +200,16 @@ def _fn_writer(sqls: list[AnalyzedSQL]):
         yield txt
 
 
-def _build_fn_params(sql: AnalyzedSQL, *, many=False, record_class=True):
+def _build_fn_params(sql: TypedSQL, *, many=False, record_class=True):
     params = FnParamText("conn", "asyncpg.Connection")
     if many:
         params.add_param(
-            "args", f"Iterable[{_row(sql.typed_params.values())}]"
+            "args",
+            f"Iterable[{_row(sql.param_hints.values())}]",
         ).asterix()
     else:
-        for name, type_ in sql.typed_params.items():
-            params.add_param(name, type_)
+        for name, hint in sql.param_hints.items():
+            params.add_param(name, hint)
     params.add_param("timeout", "float | None", "None")
     if record_class:
         # the argument is a class, not a record
@@ -210,7 +217,7 @@ def _build_fn_params(sql: AnalyzedSQL, *, many=False, record_class=True):
     return params
 
 
-def _one(sql: AnalyzedSQL):
+def _one(sql: TypedSQL):
     """Run a query and return the first row.
 
     :param str query:
@@ -234,11 +241,11 @@ def _one(sql: AnalyzedSQL):
     body = BodyText(
         _call("fetchrow", sql, "timeout=timeout", "record_class=record_class")
     )
-    return_ = FnReturnText().add(f"{_row(t[1] for t in sql.typed_attrs)} | None")
+    return_ = FnReturnText().add(f"{_row(sql.result_hints)} | None")
     return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
-def _many(sql: AnalyzedSQL):
+def _many(sql: TypedSQL):
     """Run a query and return the results as a list of :class:`Record`.
 
     :param str query:
@@ -258,11 +265,11 @@ def _many(sql: AnalyzedSQL):
     """
     params = _build_fn_params(sql)
     body = BodyText(_call("fetch", sql, "timeout=timeout", "record_class=record_class"))
-    return_ = FnReturnText().add(f"list[{_row(t[1] for t in sql.typed_attrs)}]")
+    return_ = FnReturnText().add(f"list[{_row(sql.result_hints)}]")
     return FnText(sql.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
-def _fetchval(sql: AnalyzedSQL):
+def _fetchval(sql: TypedSQL):
     """Run a query and return a value in the first row.
 
     :param str query: Query text.
@@ -282,14 +289,12 @@ def _fetchval(sql: AnalyzedSQL):
         "column", f"typing.Literal[{columns}]", "0"
     )
     body = BodyText(_call("fetchval", sql, "column=column", "timeout=timeout"))
-    values = list(
-        dict.fromkeys(t[1] for t in sql.typed_attrs)
-    )  # distinct types, in column order
+    values = list(dict.fromkeys(sql.result_hints))  # distinct types, in column order
     return_ = FnReturnText().add(" | ".join([*values, "None"]))
     return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
-def _fetchmany(sql: AnalyzedSQL):
+def _fetchmany(sql: TypedSQL):
     """Run a query for each sequence of arguments in *args*
     and return the results as a list of :class:`Record`.
 
@@ -322,11 +327,11 @@ def _fetchmany(sql: AnalyzedSQL):
     body = BodyText(
         f"return await conn.fetchmany({sql.source.name.upper()}, args, timeout=timeout, record_class=record_class)"
     )
-    return_ = FnReturnText().add(f"list[{_row(t[1] for t in sql.typed_attrs)}]")
+    return_ = FnReturnText().add(f"list[{_row(sql.result_hints)}]")
     return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
-def _exec(sql: AnalyzedSQL):
+def _exec(sql: TypedSQL):
     """Execute an SQL command (or commands).
 
     This method can execute many SQL commands at once, when no arguments
@@ -374,7 +379,7 @@ def _exec(sql: AnalyzedSQL):
     return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 
 
-def _execmany(sql: AnalyzedSQL):
+def _execmany(sql: TypedSQL):
     """Execute an SQL *command* for each sequence of arguments in *args*.
 
     Example:
@@ -403,12 +408,12 @@ def _row(types: Iterable[str]) -> str:
     return f"tuple[{', '.join(types)}]" if types else "tuple[()]"
 
 
-def _call(method: str, sql: AnalyzedSQL, *extra: str) -> str:
+def _call(method: str, sql: TypedSQL, *extra: str) -> str:
     args = [sql.source.name.upper(), *sql.typed_params.keys(), *extra]
     return f"return await conn.{method}({', '.join(args)})"
 
 
-def _doc(sql: AnalyzedSQL) -> str:
+def _doc(sql: TypedSQL) -> str:
     """the query as a raw docstring, in a ``` block for IDE hovers;
     none if it contains \"\"\" (that would end it)"""
     text = sql.source.text

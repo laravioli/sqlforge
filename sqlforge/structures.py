@@ -8,10 +8,6 @@ from typing import Self
 
 from sqlglot import exp
 
-type StrParamName = str
-type StrAttrName = str
-type StrPythonType = str
-
 
 class QueryKind(StrEnum):
     ONE = "one"  # fetchrow
@@ -62,18 +58,3 @@ class SQL:
 class TransformedSQL(SQL):
     params: dict[str, int]
     text: str
-
-
-@dataclass(frozen=True, slots=True)
-class TypedSQL:
-    source: TransformedSQL
-    typed_params: dict[StrParamName, StrPythonType]
-    typed_attrs: list[tuple[StrAttrName, StrPythonType]]
-
-    @property
-    def name(self):
-        return self.source.name
-
-    @property
-    def origin(self):
-        return self.source.origin
