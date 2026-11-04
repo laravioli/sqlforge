@@ -28,7 +28,7 @@ class SchemaCodegen:
             Text()
             .import_from("__future__", "annotations")
             .import_(*sorted(used - schemas))
-            .import_from(".", *schemas)
+            .import_from(".", *sorted(schemas))
         )
 
         return imports.newline().add(body)

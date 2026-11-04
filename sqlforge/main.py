@@ -72,7 +72,7 @@ def gen(file: Path | None):
     from .writer import write
 
     try:
-        write(cfg.out, asyncio.run(Blacksmith(cfg).forge(sqls)))
+        write(cfg.out, asyncio.run(Blacksmith.forge(cfg, sqls)))
     except (ConnectionError, SqlforgeError) as e:
         raise click.ClickException(str(e)) from e
 
