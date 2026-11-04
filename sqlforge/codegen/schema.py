@@ -15,36 +15,43 @@ from .structures import PYTHON_ANY, DriverCtx
 class SchemaCodegen:
     def __init__(self, ctx: DriverCtx):
         self.ctx = ctx
+        self.format = "msgspec"
 
     def gen(self, ns: str):
-        body = Text()
-        for pg_text in self._writer(ns):
+        body, used = Text(), set[str]()
+        for pg_text, modules in self._writer(ns):
             body.add(pg_text).newline()
-
+            used |= modules
+        used.discard(normalize_name(ns))
+        schemas = used.intersection(self.ctx.normalized_schema_import)
         imports = (
             Text()
             .import_from("__future__", "annotations")
-            .import_(*self.ctx.default_import, keep=lambda m: f"{m}." in body)
-            .import_from(
-                ".",
-                *self.ctx.normalized_schema_import,
-                keep=lambda m: f"{m}." in body and m != normalize_name(ns),
-            )
+            .import_(*sorted(used - schemas))
+            .import_from(".", *schemas)
         )
 
         return imports.newline().add(body)
 
     def _writer(self, ns: str):
         for pg_type in (v for v in self.ctx.pg_types.values() if v.ns == ns):
+            types = self.ctx.python_types
             if not isidentifier(camel_case(pg_type.name)):  # Any
                 continue
             match pg_type:
-                case CompositeType():
-                    yield self._composite(pg_type, ns)
-                case DomainType():
-                    yield self._domain(pg_type, ns)
+                case CompositeType(attributes=attrs):
+                    yield (
+                        self._composite(pg_type, ns),
+                        frozenset(
+                            {self.format}.union(
+                                *(types[a.attr_type].modules for a in attrs)
+                            )
+                        ),
+                    )
+                case DomainType(basetype=base):
+                    yield self._domain(pg_type, ns), types[base].modules
                 case EnumType():
-                    yield self._enum(pg_type)
+                    yield self._enum(pg_type), frozenset({"enum"})
 
     def _composite(self, composite: CompositeType, ns: str):
         attrs = composite.attributes

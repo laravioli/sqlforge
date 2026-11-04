@@ -31,22 +31,13 @@ from .structures import (
     TypedSQL,
 )
 
-_MODULES = (
-    "asyncpg",
-    "datetime",
-    "decimal",
-    "enum",
-    "ipaddress",
-    "msgspec",
-    "typing",
-    "uuid",
-)
+_MANY = (QueryKind.FETCHMANY, QueryKind.EXECMANY)
 
 
 class AsyncpgCodegen:
     def __init__(self, pg_types: PGTypeRegister):
         self.ctx = DriverCtx(
-            pg_types, {oid: _python_type(oid, pg_types) for oid in pg_types}, _MODULES
+            pg_types, {oid: _python_type(oid, pg_types) for oid in pg_types}
         )
         self._schema = SchemaCodegen(self.ctx)
 
@@ -72,22 +63,21 @@ class AsyncpgCodegen:
         body = Text()
         for fn in _fn_writer(sqls):
             body.add(fn).newline()
-
+        used = {"asyncpg", "typing"}.union(*(sql.modules for sql in sqls))
+        schemas = used.intersection(self.ctx.normalized_schema_import)
         imports = (
             Text("from __future__ import annotations")
             .newline()
             .newline()
-            .import_(*_MODULES, keep=lambda m: f"{m}." in body)
+            .import_(*sorted(used - schemas))
             .newline()
-            .import_from(
-                "collections.abc", "Iterable", keep=lambda _: "Iterable[" in body
-            )
-            .import_from(
-                f"{'.' * sqls[0].origin.depth}schema",
-                *self.ctx.normalized_schema_import,
-                keep=lambda m: f"{m}." in body,
-            )
+            .import_from(f"{'.' * sqls[0].origin.depth}schema", *sorted(schemas))
         )
+        if any(sql.source.kind in _MANY for sql in sqls):
+            imports.import_from(
+                "collections.abc",
+                "Iterable",
+            )
 
         return imports.newline().add(body)
 

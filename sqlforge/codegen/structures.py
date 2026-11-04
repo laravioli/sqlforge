@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -70,6 +71,12 @@ class PythonRegularType:
             else self.hint
         )
 
+    @cached_property
+    def modules(self) -> frozenset[str]:
+        if self.ns is not None:  # user type: its schema module
+            return frozenset({normalize_name(self.ns)})
+        return frozenset(re.findall(r"(?<![\w.])(\w+)\.", self.hint))
+
 
 PYTHON_ANY = PythonRegularType(hint="typing.Any")
 
@@ -89,6 +96,10 @@ class PythonArrayType:
     @cached_property
     def ns(self):
         return self.inner.ns
+
+    @cached_property
+    def modules(self) -> frozenset[str]:
+        return self.inner.modules
 
 
 @dataclass(frozen=True)
@@ -110,12 +121,15 @@ class PythonRangeType:
     def ns(self):
         return self.inner.ns
 
+    @cached_property
+    def modules(self) -> frozenset[str]:
+        return self.inner.modules
+
 
 @dataclass(frozen=True)
 class DriverCtx:
     pg_types: PGTypeRegister
     python_types: PythonTypeRegister
-    default_import: Sequence[str]
 
     @cached_property
     def schema_import(self):
@@ -153,6 +167,13 @@ class TypedSQL:
             null.python(t.qualified_hint)
             for (_, t), null in zip(self.typed_attrs, self.nulls)
         ]
+
+    @cached_property
+    def modules(self) -> frozenset[str]:
+        return frozenset().union(
+            *(t.modules for t in self.typed_params.values()),
+            *(t.modules for _, t in self.typed_attrs),
+        )
 
     @classmethod
     def convert(cls, source: AnalyzedSQL, reg: PythonTypeRegister):

@@ -30,11 +30,7 @@ class Text:
             self._string += f"import {m}\n"
         return self
 
-    def import_from(
-        self, module: str, *objs: str, keep: None | Callable[[str], bool] = None
-    ):
-        if keep is not None:
-            objs = tuple(o for o in objs if keep(o))
+    def import_from(self, module: str, *objs: str):
         if objs:
             self._string += f"from {module} import {', '.join(objs)}\n"
         return self
