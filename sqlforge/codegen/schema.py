@@ -1,4 +1,5 @@
 import re
+from typing import Literal
 
 from sqlforge.introspection.structures import (
     CompositeType,
@@ -9,13 +10,15 @@ from sqlforge.introspection.structures import (
 from sqlforge.utils import camel_case, isidentifier, normalize_name, unique_names
 
 from .base import DomainText, EnumText, StructText, Text
-from .structures import PYTHON_ANY, DriverCtx
+from .structures import PYTHON_ANY, Driver
 
 
 class SchemaCodegen:
-    def __init__(self, ctx: DriverCtx):
-        self.ctx = ctx
-        self.format = "msgspec"
+    def __init__(
+        self, driver: Driver, format: Literal["dataclass", "msgspec", "pydantic"]
+    ):
+        self.driver = driver
+        self.format = format
 
     def gen(self, ns: str):
         body, used = Text(), set[str]()
@@ -23,7 +26,7 @@ class SchemaCodegen:
             body.add(pg_text).newline()
             used |= modules
         used.discard(normalize_name(ns))
-        schemas = used.intersection(self.ctx.normalized_schema_import)
+        schemas = used.intersection(self.driver.normalized_schema_import)
         imports = (
             Text()
             .import_from("__future__", "annotations")
@@ -34,8 +37,8 @@ class SchemaCodegen:
         return imports.newline().add(body)
 
     def _writer(self, ns: str):
-        for pg_type in (v for v in self.ctx.pg_types.values() if v.ns == ns):
-            types = self.ctx.python_types
+        for pg_type in (v for v in self.driver.pg_types.values() if v.ns == ns):
+            types = self.driver.python_types
             if not isidentifier(camel_case(pg_type.name)):  # Any
                 continue
             match pg_type:
@@ -70,7 +73,7 @@ class SchemaCodegen:
         return txt
 
     def _domain(self, domain: DomainType, ns: str):
-        pt = self.ctx.python_types[domain.basetype]
+        pt = self.driver.python_types[domain.basetype]
         return DomainText(domain.name, pt.hint if pt.ns == ns else pt.qualified_hint)
 
     def _enum(self, enum: EnumType):
@@ -82,7 +85,7 @@ class SchemaCodegen:
         return txt
 
     def _hint(self, attr: PGAttribute, ns: str) -> str:
-        pt = self.ctx.python_types[attr.attr_type]
+        pt = self.driver.python_types[attr.attr_type]
         hint = pt.hint if pt.ns == ns else pt.qualified_hint
         return f"{hint} | None" if attr.nullable and pt is not PYTHON_ANY else hint
 

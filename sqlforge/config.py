@@ -16,6 +16,7 @@ class Config(
     out: Path
     dsn: str | None = None
     driver: Literal["asyncpg"] = "asyncpg"
+    format: Literal["dataclass", "msgspec", "pydantic"] = "dataclass"
     search_path: tuple[str, ...] = ("public",)
     classes: dict[str, str] = {}
 

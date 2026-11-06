@@ -9,8 +9,8 @@ from sqlforge.structures import SQL
 
 class Blacksmith:
     def __init__(self, config: Config):
-        self.config = config
-        match self.config.driver:
+        self.cfg = config
+        match self.cfg.driver:
             case "asyncpg":
                 from sqlforge.codegen.asyncpg import AsyncpgCodegen
 
@@ -21,9 +21,9 @@ class Blacksmith:
 
     async def pipeline(self, sqls: list[SQL]) -> list[Output]:
         transformed = [self.transform(sql) for sql in sqls]
-        pg_types, prepared = await Fetcher.fetch(self.config.dsn, transformed)
+        pg_types, prepared = await Fetcher.fetch(self.cfg.dsn, transformed)
         analyzed = Engine(pg_types).analyze(prepared)
-        return self.codegen_class(pg_types).gen(analyzed)
+        return self.codegen_class(pg_types, self.cfg.format).gen(analyzed)
 
     @classmethod
     async def forge(cls, cfg: Config, sqls: list[SQL]):

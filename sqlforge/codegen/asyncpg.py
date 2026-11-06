@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from typing import Literal
 
 from sqlforge.inference.structures import AnalyzedSQL
 from sqlforge.introspection.structures import (
@@ -20,7 +21,7 @@ from .base import BodyText, FnParamText, FnReturnText, FnText, Text
 from .schema import SchemaCodegen
 from .structures import (
     PYTHON_ANY,
-    DriverCtx,
+    Driver,
     File,
     Output,
     PythonArrayType,
@@ -35,22 +36,29 @@ _MANY = (QueryKind.FETCHMANY, QueryKind.EXECMANY)
 
 
 class AsyncpgCodegen:
-    def __init__(self, pg_types: PGTypeRegister):
-        self.ctx = DriverCtx(
-            pg_types, {oid: _python_type(oid, pg_types) for oid in pg_types}
+    def __init__(
+        self,
+        pg_types: PGTypeRegister,
+        format: Literal["dataclass", "msgspec", "pydantic"],
+    ):
+        self.driver = Driver(
+            pg_types, {oid: _python_type(oid, pg_types) for oid in pg_types}, format
         )
-        self._schema = SchemaCodegen(self.ctx)
+        self._schema = SchemaCodegen(self.driver, format)
 
     def gen(self, sqls: list[AnalyzedSQL]) -> list[Output]:
         return [
-            *[Schema.make(sc, self._schema.gen(sc)) for sc in self.ctx.schema_import],
+            *[
+                Schema.make(sc, self._schema.gen(sc))
+                for sc in self.driver.schema_import
+            ],
             *[
                 File(
                     fs[0].origin.src,
                     filepath,
-                    self._file_content(
+                    self._file(
                         [
-                            TypedSQL.convert(source, self.ctx.python_types)
+                            TypedSQL.convert(source, self.driver.python_types)
                             for source in fs
                         ]
                     ),
@@ -59,12 +67,12 @@ class AsyncpgCodegen:
             ],
         ]
 
-    def _file_content(self, sqls: list[TypedSQL]):
+    def _file(self, sqls: list[TypedSQL]):
         body = Text()
         for fn in _fn_writer(sqls):
             body.add(fn).newline()
         used = {"asyncpg", "typing"}.union(*(sql.modules for sql in sqls))
-        schemas = used.intersection(self.ctx.normalized_schema_import)
+        schemas = used.intersection(self.driver.normalized_schema_import)
         imports = (
             Text("from __future__ import annotations")
             .newline()
@@ -84,7 +92,7 @@ class AsyncpgCodegen:
 
 # Hint
 
-PG_BASE_TYPE: dict[str, str] = {
+_BASE_TYPE: dict[str, str] = {
     "record": "tuple",
     "bit": "asyncpg.BitString",
     "varbit": "asyncpg.BitString",
@@ -130,6 +138,9 @@ PG_BASE_TYPE: dict[str, str] = {
     "cid": "int",
 }
 
+_RANGE = "asyncpg.Range[{}]"
+_MULTIRANGE = "list[asyncpg.Range[{}]]"
+
 
 def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:
 
@@ -139,7 +150,8 @@ def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:
 
         case RangeType(kind=kind, range_subtype=sub):
             return PythonRangeType(
-                _python_type(sub, pg_types), kind is TypeKind.MULTI_RANGE
+                _python_type(sub, pg_types),
+                _MULTIRANGE if kind is TypeKind.MULTI_RANGE else _RANGE,
             )
 
         case CompositeType() | DomainType() | EnumType() as t if t.is_user_defined:
@@ -156,7 +168,7 @@ def _python_type(oid: Oid, pg_types: PGTypeRegister) -> PythonType:
             return _python_type(base, pg_types)
 
         case BaseType(name=name) | PseudoType(name=name):
-            pg_base = PG_BASE_TYPE.get(name)
+            pg_base = _BASE_TYPE.get(name)
             return PythonRegularType(pg_base) if pg_base is not None else PYTHON_ANY
 
         case _:  # system composite types
@@ -279,7 +291,12 @@ def _fetchval(sql: TypedSQL):
         "column", f"typing.Literal[{columns}]", "0"
     )
     body = BodyText(_call("fetchval", sql, "column=column", "timeout=timeout"))
-    values = list(dict.fromkeys(sql.result_hints))  # distinct types, in column order
+    # None once (no row or NULL value), then the distinct types a column may hold
+    values = dict.fromkeys(
+        t.qualified_hint
+        for (_, t), null in zip(sql.typed_attrs, sql.nulls)
+        if null.may_value
+    )
     return_ = FnReturnText().add(" | ".join([*values, "None"]))
     return FnText(sql.source.name.lower(), params, body, return_, doc=_doc(sql)).gen()
 

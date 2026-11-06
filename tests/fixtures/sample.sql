@@ -98,3 +98,10 @@ SELECT '1'::email;
 
 --name: test_escape:one
 SELECT 'C:\new\table' AS path;
+
+
+--name: test_range:fetchval
+SELECT int4range(10, 20);
+
+--name : test_multirange:fetchval
+SELECT '{[3,7), [8,9)}'::int4multirange;

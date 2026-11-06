@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from sqlforge.inference.structures import AnalyzedSQL, Nullability
 from sqlforge.introspection.structures import Oid, PGTypeRegister
@@ -105,17 +105,15 @@ class PythonArrayType:
 @dataclass(frozen=True)
 class PythonRangeType:
     inner: PythonType
-    multirange: bool
+    template: str
 
     @cached_property
     def hint(self):
-        rng = f"asyncpg.Range[{self.inner.hint}]"
-        return f"list[{rng}]" if self.multirange else rng
+        return self.template.format(self.inner.hint)
 
     @cached_property
     def qualified_hint(self):
-        rng = f"asyncpg.Range[{self.inner.qualified_hint}]"
-        return f"list[{rng}]" if self.multirange else rng
+        return self.template.format(self.inner.qualified_hint)
 
     @cached_property
     def ns(self):
@@ -123,13 +121,16 @@ class PythonRangeType:
 
     @cached_property
     def modules(self) -> frozenset[str]:
-        return self.inner.modules
+        return self.inner.modules | frozenset(
+            re.findall(r"(?<![\w.])(\w+)\.", self.template)
+        )
 
 
 @dataclass(frozen=True)
-class DriverCtx:
+class Driver:
     pg_types: PGTypeRegister
     python_types: PythonTypeRegister
+    format: Literal["dataclass", "msgspec", "pydantic"]
 
     @cached_property
     def schema_import(self):
