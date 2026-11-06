@@ -22,11 +22,11 @@ _TYPEINFO: typing.Final = """\
             t.typname                       AS name,
             t.typtype                       AS kind,
             c.relkind                       AS comp_kind,
-
+ 
             (CASE WHEN c.relkind IN ('v', 'm')
                 THEN pg_get_viewdef(c.oid)
             END)                            AS query,
-
+ 
             (CASE WHEN t.typtype = 'd' THEN
                 (WITH RECURSIVE typebases(oid, depth) AS (
                     SELECT
@@ -36,9 +36,9 @@ _TYPEINFO: typing.Final = """\
                         pg_type t2
                     WHERE
                         t2.oid = t.oid
-
+ 
                     UNION ALL
-
+ 
                     SELECT
                         t2.typbasetype      AS oid,
                         tb.depth + 1        AS depth
@@ -49,10 +49,10 @@ _TYPEINFO: typing.Final = """\
                        tb.oid = t2.oid
                        AND t2.typbasetype != 0
                ) SELECT oid FROM typebases ORDER BY depth DESC LIMIT 1)
-
+ 
                ELSE NULL
             END)                            AS basetype,
-
+ 
             t.typelem                       AS elemtype,
             t.typcategory::text             AS category,
             COALESCE(
@@ -73,7 +73,13 @@ _TYPEINFO: typing.Final = """\
                         'attr_type', a.atttypid::int,
                         'name',      a.attname,
                         'position',  a.attnum,
-                        'nullable',  NOT a.attnotnull
+                        'nullable',  NOT a.attnotnull OR EXISTS (
+                            SELECT FROM pg_constraint k
+                            WHERE k.conrelid = a.attrelid
+                              AND k.contype = 'n'
+                              AND k.conkey = ARRAY[a.attnum]
+                              AND (NOT k.convalidated
+                                   OR (k.connoinherit AND c.relhassubclass)))
                     ) ORDER BY a.attnum)                       AS attributes
                 FROM pg_attribute a
                 WHERE a.attrelid = c.oid
@@ -91,7 +97,7 @@ _TYPEINFO: typing.Final = """\
 
 LOOKUP_TYPES: typing.Final = f"""\
 WITH RECURSIVE typeinfo_tree(
-    oid, ns, name, kind, comp_kind, query, basetype, elemtype, 
+    oid, ns, name, kind, comp_kind, query, basetype, elemtype,
     category, range_subtype, attrtypoids, attributes, depth)
 AS (
     SELECT
@@ -99,18 +105,18 @@ AS (
         ti.basetype, ti.elemtype, ti.category, ti.range_subtype,
         ti.attrtypoids, ti.attributes, 0
     FROM
-        {_TYPEINFO} AS ti
+{_TYPEINFO} AS ti
     WHERE
         ti.oid = any($1::oid[])
-
+ 
     UNION ALL
-
+ 
     SELECT
         ti.oid, ti.ns, ti.name, ti.kind, ti.comp_kind, ti.query,
         ti.basetype, ti.elemtype, ti.category, ti.range_subtype,
         ti.attrtypoids, ti.attributes, tt.depth + 1
     FROM
-        {_TYPEINFO} ti,
+{_TYPEINFO} ti,
         typeinfo_tree tt
     WHERE
         (tt.elemtype IS NOT NULL AND ti.oid = tt.elemtype)

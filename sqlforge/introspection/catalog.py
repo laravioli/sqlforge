@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass
 from functools import cache
-from typing import Any, ClassVar
+from typing import Any
 
 from sqlglot import exp
 from sqlglot.dialects.postgres import Postgres
@@ -19,22 +19,16 @@ DEFAULT_SEARCH_PATH = ("pg_catalog", "public")
 
 @dataclass(frozen=True)
 class Table:
-    enforced: ClassVar[bool] = True
-
     ns: str
     name: str
     columns: dict[str, Column]
 
     def maybe_null(self, col: str):
-        return not self.enforced or self.columns[col].nullable
+        return self.columns[col].nullable
 
     @property
     def names(self) -> list[str]:
         return [c for c in self.columns]
-
-
-class ForeignTable(Table):
-    enforced: ClassVar[bool] = False
 
 
 @dataclass(frozen=True)
@@ -54,12 +48,11 @@ def sources(register: PGTypeRegister) -> Generator[Table | View]:
         columns = {c.name: c for c in t.attributes}
         match t:
             case CompositeType(
-                comp_kind=CompositeKind.TABLE | CompositeKind.PARTITIONED_TABLE
+                comp_kind=CompositeKind.TABLE
+                | CompositeKind.PARTITIONED_TABLE
+                | CompositeKind.FOREIGN_TABLE
             ):
                 yield Table(t.ns, t.name, columns)
-
-            case CompositeType(comp_kind=CompositeKind.FOREIGN_TABLE):
-                yield ForeignTable(t.ns, t.name, columns)
 
             case ViewType():
                 yield View(t.ns, t.name, columns, t.query)

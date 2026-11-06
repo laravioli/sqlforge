@@ -16,7 +16,7 @@ class TypeEval:
         self.catalog = catalog
 
     def type(self, e: exp.Expr) -> int | Literal["unknown"]:
-        """catalog type of a column, field path or cast"""
+        """catalog type of a column, field path"""
         match e:
             case exp.Paren(this=this) | exp.Alias(this=this):
                 return self.type(this)
