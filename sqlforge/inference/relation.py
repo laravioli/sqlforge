@@ -11,7 +11,7 @@ from .lattice import Nullability
 type Alias = str
 type Column = str
 type ColKey = tuple[Alias, Column]  # alias.column
-type ColType = Oid | Literal["unknown"]
+type ColTypoid = Oid | Literal["unknown"]
 
 
 def support(fs: Sequence[Formula]):
@@ -25,7 +25,7 @@ class Relation:
     ctx: Context
     columns: Sequence[str]
     nulls: Sequence[Formula]
-    types: Sequence[ColType]
+    types: Sequence[ColTypoid]
     invariant: Formula
 
     @property
@@ -115,7 +115,7 @@ class Template:
 class Item:
     columns: Sequence[Column]
     fields: Sequence[Formula]
-    types: Sequence[ColType]
+    types: Sequence[ColTypoid]
     padded: Formula
     _index: dict[Column, int]
 
@@ -127,7 +127,7 @@ class Item:
         """Raise: KeyError"""
         return self.fields[self._index[column]]
 
-    def type_of(self, column: Column) -> ColType:
+    def type_of(self, column: Column) -> ColTypoid:
         """Raise: KeyError"""
         return self.types[self._index[column]]
 

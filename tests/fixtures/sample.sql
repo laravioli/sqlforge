@@ -105,3 +105,13 @@ SELECT int4range(10, 20);
 
 --name : test_multirange:fetchval
 SELECT '{[3,7), [8,9)}'::int4multirange;
+
+--name : test_row:one
+SELECT Row(1,2);
+
+
+--name : test_dt_comp:one
+select u from (select ua from user_account ua limit 1) as u;
+
+--name : test_dt_comp2:one
+select u.ua from (select ua from user_account ua limit 1) as u;

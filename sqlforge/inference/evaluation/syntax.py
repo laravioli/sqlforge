@@ -113,7 +113,8 @@ def is_row(expression: exp.Expr) -> bool:
     return (
         isinstance(expression, exp.Tuple)
         or isinstance(expression, exp.Anonymous)
-        and expression.name.lower() == "row"
+        and isinstance(expression.this, str)
+        and expression.this.lower() == "row"
     )
 
 
@@ -124,6 +125,16 @@ def is_cast_row(e: exp.Expr) -> bool:
     while isinstance(e, exp.Cast):
         e = e.this.unnest()
     return is_row(e)
+
+
+def is_empty_value(e: exp.Expr) -> bool:
+    """NULL, '{}' or ARRAY[]: holds no composite value"""
+    e = e.this if isinstance(e, exp.Cast) else e
+    return (
+        isinstance(e, exp.Null)
+        or (isinstance(e, exp.Literal) and e.this == "{}")
+        or (isinstance(e, exp.Array) and not e.expressions)
+    )
 
 
 def is_scalar(
@@ -177,7 +188,7 @@ def _own_calls(node: exp.Expr) -> Iterator[exp.Expr]:
     stack = [node]
     while stack:
         n = stack.pop()
-        if isinstance(n, (exp.AggFunc, exp.Anonymous)):
+        if isinstance(n, (exp.AggFunc, exp.Anonymous)) and not is_row(n):
             yield n
         stack.extend(c for c in n.iter_expressions() if not isinstance(c, exp.Query))
 

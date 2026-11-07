@@ -9,7 +9,7 @@ from sqlglot import exp
 from sqlforge.inference.catalog import Catalog
 from sqlforge.inference.context import Context, Formula
 from sqlforge.inference.exception import UnknownColumn
-from sqlforge.inference.relation import Alias, ColKey, ColType, Item, Row, Subquery
+from sqlforge.inference.relation import Alias, ColKey, ColTypoid, Item, Row, Subquery
 
 from .evaluator import Evaluator
 from .notebook import Notebook
@@ -77,7 +77,7 @@ class Env:
         except KeyError:
             raise UnknownColumn(key)
 
-    def col_oid(self, key: ColKey) -> ColType:
+    def col_oid(self, key: ColKey) -> ColTypoid:
         """oid from one row column or unknown (cte, derived table)"""
         try:
             return self.item(key[0]).type_of(key[1])

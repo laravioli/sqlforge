@@ -45,7 +45,7 @@ class Evaluator:
         return self.env.scope.notebook
 
     def type_of(self, e: exp.Expr):
-        return self.types.type(e)
+        return self.types.oid(e)
 
     def null(self, e: exp.Expr) -> Formula:
         ctx = self.ctx
@@ -425,7 +425,7 @@ class Evaluator:
             return self._quantified(exp.EQ, left, "any", query)
 
         if not e.expressions or any(is_cast_row(x) for x in (left, *e.expressions)):
-            return Pred.fresh(self.ctx)  # IN UNNEST(...) isn't Postgres, or a cast row
+            return Pred.fresh(self.ctx)
 
         l = self._value(left)
         return self._any(

@@ -15,11 +15,11 @@ class TypeEval:
         self.env = env
         self.catalog = catalog
 
-    def type(self, e: exp.Expr) -> int | Literal["unknown"]:
-        """catalog type of a column, field path"""
+    def oid(self, e: exp.Expr) -> int | Literal["unknown"]:
+        """catalog typoid of a column, field path"""
         match e:
             case exp.Paren(this=this) | exp.Alias(this=this):
-                return self.type(this)
+                return self.oid(this)
 
             case exp.Column(table=alias, name=col):
                 return self.env.col_oid((alias, col))
@@ -38,5 +38,5 @@ class TypeEval:
 
     def shape(self, e: exp.Expr) -> Shape:
         """ask the catalog for a shape : scalar, composite or unknown"""
-        oid = self.type(e)
+        oid = self.oid(e)
         return "unknown" if oid == "unknown" else self.catalog.shape(oid)
