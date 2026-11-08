@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from functools import cached_property, reduce
 from typing import cast, overload
 
@@ -15,7 +16,7 @@ from .evaluation import Env, Notebook
 from .evaluation.syntax import is_join_group, is_plain_aggregate
 from .exception import Unsupported
 from .prepare import prepare_view
-from .relation import Relation, Row, Subquery, Template
+from .relation import Col, Relation, Row, Subquery, Template
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +140,8 @@ class ScopedAnalyzer:
 
         return Relation(
             ctx=self.ctx,
-            columns=[e.alias_or_name for e in select.selects],
-            nulls=[ev.null(e) for e in select.selects],
-            types=[ev.type_of(e) for e in select.selects],
+            names=tuple(e.alias_or_name for e in select.selects),
+            columns=tuple(ev.to_col(e) for e in select.selects),
             invariant=row.invariant & self.ctx.all(self.side),
         )
 
@@ -223,14 +223,16 @@ class Analyzer:
 
         return Relation(
             ctx=self.ctx,
-            columns=tuple(source.columns.keys()),
-            nulls=[
-                self.ctx.fresh(Kind.BASE)
-                if source.maybe_null(col.name)
-                else self.ctx.false
+            names=tuple(source.columns.keys()),
+            columns=tuple(
+                Col(
+                    self.ctx.fresh(Kind.BASE)
+                    if source.maybe_null(col.name)
+                    else self.ctx.false,
+                    col.attr_type,
+                )
                 for col in source.columns.values()
-            ],
-            types=[c.attr_type for c in source.columns.values()],
+            ),
             invariant=self.ctx.true,
         )
         # compression is not needed
@@ -243,25 +245,34 @@ class Analyzer:
             return Template(
                 Relation(
                     ctx=self.ctx,
-                    columns=tuple(view.columns),
-                    nulls=stored_view.nulls,
-                    types=[c.attr_type for c in view.columns.values()],
+                    names=tuple(view.columns),
+                    columns=stored_view.columns,
                     invariant=stored_view.invariant,
                 )
             ).materialize()
 
         try:
             relation = self.run(prepare_view(view, self.catalog.mapping_schema))
-
+            relation = replace(
+                relation,
+                columns=tuple(
+                    Col(c.null, a.attr_type)
+                    for c, a in zip(
+                        relation.columns, view.columns.values(), strict=True
+                    )
+                ),
+            )
         except Exception as e:
             if not isinstance(e, (SqlglotError, Unsupported)):
                 logger.warning("inference failed on view %s.%s", *key, exc_info=e)
 
             relation = Relation(  # view we can't analyze: every column may be NULL
                 ctx=self.ctx,
-                columns=tuple(view.columns),
-                nulls=[self.ctx.fresh(Kind.MAYBE) for _ in view.columns],
-                types=[c.attr_type for c in view.columns.values()],
+                names=tuple(view.columns),
+                columns=tuple(
+                    Col(self.ctx.fresh(Kind.MAYBE), col.attr_type)
+                    for col in view.columns.values()
+                ),
                 invariant=self.ctx.true,
             )
 

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Literal, NamedTuple
 
 from sqlglot import exp
 
 from sqlforge.inference.catalog import Composite
 from sqlforge.inference.context import Context, Formula, Kind
+from sqlforge.inference.relation import Item, TypeOid
 
 type NullFormula = Formula
 type PredicateFormula = tuple[Formula, Formula]
@@ -58,17 +60,29 @@ class Pred(NamedTuple):
 @dataclass(frozen=True)
 class Scalar:
     null: Formula
+    oid: TypeOid
     key: exp.Expr
 
 
 @dataclass(frozen=True, slots=True)
 class KeyedItem:
-    null: Formula
-    fields: Sequence[Formula]
+    item: Item
     key: exp.Expr
 
+    @property
+    def null(self):
+        return self.item.null
 
-@dataclass(frozen=True, slots=True)
+    @property
+    def oid(self) -> TypeOid:
+        return "unknown"
+
+    @property
+    def fields(self):
+        return self.item.nulls
+
+
+@dataclass(frozen=True)
 class Tuple:
     null: Formula  # ctx.false
     args: Sequence[exp.Expr]
@@ -76,6 +90,11 @@ class Tuple:
     key: exp.Expr
 
     @property
+    def oid(self) -> TypeOid:
+        # row type is anonymous record
+        return "unknown"
+
+    @cached_property
     def fields(self) -> Sequence[Formula]:
         return [self._null_of(k) for k in self.args]
 
@@ -85,6 +104,7 @@ class Opaque:
     """a composite whose fields are unknown: column, function, Dot, CASE... or an unknown value"""
 
     null: Formula
+    oid: TypeOid
     shape: Composite | Literal["unknown"]
     key: exp.Expr
 

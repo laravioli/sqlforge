@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from .catalog import Oid
+from sqlforge.introspection.structures import Oid
+
 from .context import Context, Formula, Kind
 from .lattice import Nullability
 
 type Alias = str
 type Column = str
 type ColKey = tuple[Alias, Column]  # alias.column
-type ColTypoid = Oid | Literal["unknown"]
+type TypeOid = Oid | Literal["unknown"]
 
 
 def support(fs: Sequence[Formula]):
@@ -19,18 +20,31 @@ def support(fs: Sequence[Formula]):
 
 
 @dataclass(frozen=True, slots=True)
+class Col:
+    null: Formula
+    type: TypeOid
+
+    def map(self, f: Callable[[Formula], Formula]) -> Col:  # rename, copy, pad
+        """transform null formula"""
+        return replace(self, null=f(self.null))
+
+
+@dataclass(frozen=True, slots=True)
 class Relation:
     """Result of a scope or a cte/table/view materialization"""
 
     ctx: Context
-    columns: Sequence[str]
-    nulls: Sequence[Formula]
-    types: Sequence[ColTypoid]
+    names: tuple[str, ...]
+    columns: tuple[Col, ...]
     invariant: Formula
 
     @property
     def is_empty(self) -> bool:
         return not self.ctx.sat(self.invariant)
+
+    @property
+    def nulls(self):
+        return tuple(c.null for c in self.columns)
 
     @property
     def formulas(self):
@@ -61,14 +75,14 @@ class Relation:
 
     def row(self, alias: str):
         columns = self.columns
+        names = self.names
         return Row(
             {
                 alias: Item(
+                    names,
                     columns,
-                    self.nulls,
-                    self.types,
                     self.ctx.false,
-                    {c: columns.index(c) for c in columns},
+                    {name: names.index(name) for name in names},
                 )
             },
             self.invariant,
@@ -82,6 +96,71 @@ class Relation:
         else:
             eps = self.ctx.fresh(Kind.EMPTY)
         return Subquery(self, eps)
+
+
+@dataclass(frozen=True, slots=True)
+class Row:
+    """The row being transformed inside one scope"""
+
+    items: Mapping[Alias, Item]
+    invariant: Formula
+
+    @staticmethod
+    def unit(ctx: Context):
+        return Row(items={}, invariant=ctx.true)
+
+
+@dataclass(frozen=True, slots=True)
+class Item:
+    names: tuple[str, ...]
+    columns: tuple[Col, ...]
+    padded: Formula
+    _index: dict[str, int]
+
+    @property
+    def null(self) -> Formula:
+        return self.padded
+
+    @property
+    def nulls(self):
+        return tuple(c.null for c in self.columns)
+
+    def col(self, column: Column):
+        return self.columns[self._index[column]]
+
+    def null_of(self, column: Column) -> Formula:
+        """Raise: KeyError"""
+        return self.columns[self._index[column]].null
+
+    def type_of(self, column: Column) -> TypeOid:
+        """Raise: KeyError"""
+        return self.columns[self._index[column]].type
+
+    def pad(self, real: Formula) -> Item:
+        return replace(
+            self,
+            columns=tuple(col.map(real.implies) for col in self.columns),
+            padded=real.implies(self.padded),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Subquery:
+    """A variant of relation for subquery in an expression"""
+
+    relation: Relation
+    empty: Formula  # subquery returns no row
+
+    @property
+    def scalar_null(self):
+        # if is_single_row(e): NOTE: would be done with card analysis
+        #     head = e.expressions[0].unalias()
+        #     return ctx.false if isinstance(head, exp.Count) else ctx.fresh(Kind.MAYBE)
+        return self.empty | self.relation.nulls[0]
+
+    @property
+    def nulls(self):
+        return self.relation.nulls
 
 
 @dataclass(frozen=True)
@@ -106,68 +185,9 @@ class Template:
         let = lambda f: ctx.bdd.let(fresh, f)
         return replace(
             rel,
-            nulls=list(map(let, rel.nulls)),
+            columns=tuple(col.map(let) for col in rel.columns),
             invariant=let(rel.invariant),
         )
-
-
-@dataclass(frozen=True, slots=True)
-class Item:
-    columns: Sequence[Column]
-    fields: Sequence[Formula]
-    types: Sequence[ColTypoid]
-    padded: Formula
-    _index: dict[Column, int]
-
-    @property
-    def null(self) -> Formula:
-        return self.padded
-
-    def null_of(self, column: Column) -> Formula:
-        """Raise: KeyError"""
-        return self.fields[self._index[column]]
-
-    def type_of(self, column: Column) -> ColTypoid:
-        """Raise: KeyError"""
-        return self.types[self._index[column]]
-
-    def pad(self, real: Formula) -> Item:
-        return replace(
-            self,
-            fields=[real.implies(n) for n in self.fields],
-            padded=real.implies(self.padded),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class Row:
-    """The row being transformed inside one scope"""
-
-    items: Mapping[Alias, Item]
-    invariant: Formula
-
-    @staticmethod
-    def unit(ctx: Context):
-        return Row(items={}, invariant=ctx.true)
-
-
-@dataclass(frozen=True, slots=True)
-class Subquery:
-    """A variant of relation for subquery in an expression"""
-
-    relation: Relation
-    empty: Formula  # subquery returns no row
-
-    @property
-    def scalar_null(self):
-        # if is_single_row(e): NOTE: would be done with card analysis
-        #     head = e.expressions[0].unalias()
-        #     return ctx.false if isinstance(head, exp.Count) else ctx.fresh(Kind.MAYBE)
-        return self.empty | self.relation.nulls[0]
-
-    @property
-    def nulls(self):
-        return self.relation.nulls
 
 
 class ViewStore:
@@ -187,7 +207,12 @@ class ViewStore:
         dest.declare(sorted(view.support, key=src.bdd.level_of_var))
         fs = src.copy(view.formulas, dest)
 
-        return StoredView(nulls=fs[:-1], invariant=fs[-1])
+        return StoredView(
+            columns=tuple(
+                col.map(lambda _, i=i: fs[i]) for i, col in enumerate(view.columns)
+            ),
+            invariant=fs[-1],
+        )
 
     def export(self, src: Context, key: tuple[str, str], rel: Relation):
         """
@@ -202,13 +227,22 @@ class ViewStore:
         fs = [src.bdd.let(rename, f) for f in rel.formulas] if rename else rel.formulas
         fs = src.copy(fs, dest)
 
-        self._store[key] = StoredView(nulls=fs[:-1], invariant=fs[-1])
+        self._store[key] = StoredView(
+            columns=tuple(
+                col.map(lambda _, i=i: fs[i]) for i, col in enumerate(rel.columns)
+            ),
+            invariant=fs[-1],
+        )
 
 
 @dataclass
 class StoredView:
-    nulls: Sequence[Formula]
+    columns: tuple[Col, ...]
     invariant: Formula
+
+    @property
+    def nulls(self):
+        return tuple(c.null for c in self.columns)
 
     @property
     def formulas(self):
@@ -219,4 +253,4 @@ class StoredView:
 
     @property
     def support(self):
-        return support([*self.nulls, self.invariant])
+        return support(self.formulas)

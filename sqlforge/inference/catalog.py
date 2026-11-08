@@ -18,7 +18,7 @@ from sqlforge.introspection.structures import (
     PGTypeRegister,
 )
 
-from .relation import ViewStore
+from .relation import TypeOid, ViewStore
 
 PGKey = NewType("PGKey", tuple[str | None, str])
 type Shape = Composite | Literal["scalar", "unknown"]
@@ -59,7 +59,9 @@ class Catalog:
         """
         return self._resolve(self._sources, key[0], key[1])
 
-    def shape(self, oid: Oid) -> Shape:
+    def shape(self, oid: TypeOid) -> Shape:
+        if oid == "unknown":
+            return "unknown"
         t = self._unwrap_domain(oid)
         if t is None:
             return "unknown"

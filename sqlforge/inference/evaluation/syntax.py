@@ -53,26 +53,6 @@ type StrictBinaryPredicate = (
     | exp.JSONBContainsAllTopKeys
 )
 
-GRAMMAR_SCALAR = (
-    exp.And,
-    exp.Or,
-    exp.Not,
-    exp.Xor,
-    exp.Is,
-    exp.NullSafeEQ,
-    exp.NullSafeNEQ,
-    exp.Exists,
-    exp.In,
-    exp.Between,
-    exp.Boolean,
-    exp.Literal,
-    exp.Null,
-    exp.Count,
-    exp.CurrentDate,
-    exp.CurrentTime,
-    exp.CurrentTimestamp,
-)
-
 
 def is_non_null_constant(expression: exp.Expr) -> bool:
     while isinstance(expression, (exp.Neg, exp.Paren)):
@@ -135,12 +115,6 @@ def is_empty_value(e: exp.Expr) -> bool:
         or (isinstance(e, exp.Literal) and e.this == "{}")
         or (isinstance(e, exp.Array) and not e.expressions)
     )
-
-
-def is_scalar(
-    expression: exp.Expr,
-) -> bool:  # TODO: add a map scalar function (introspection) <-> expression
-    return isinstance(expression, GRAMMAR_SCALAR)
 
 
 def is_join_group(node: exp.Expr) -> bool:

@@ -22,17 +22,15 @@ def setop(node: exp.SetOperation, left: Relation, right: Relation) -> Relation:
 
 
 def union(left: Relation, right: Relation) -> Relation:
-
     ctx = left.ctx
     side = ctx.fresh(Kind.UNION)
     return Relation(
         ctx=left.ctx,
-        columns=left.columns,
-        nulls=[
-            (side & l) | (~side & r)
-            for l, r in zip(left.nulls, right.nulls, strict=True)
-        ],
-        types=left.types,
+        names=left.names,
+        columns=tuple(
+            col.map(lambda f, r=r: (side & f) | (~side & r))
+            for col, r in zip(left.columns, right.nulls, strict=True)
+        ),
         invariant=(side.implies(left.invariant) & (~side).implies(right.invariant)),
     )
 
@@ -41,9 +39,8 @@ def intersection(left: Relation, right: Relation) -> Relation:
     ctx = left.ctx
     return Relation(
         ctx=ctx,
+        names=left.names,
         columns=left.columns,
-        nulls=left.nulls,
-        types=left.types,
         invariant=left.invariant
         & right.invariant
         & ctx.all(l.equiv(r) for l, r in zip(left.nulls, right.nulls, strict=True)),
