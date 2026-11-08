@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal, NewType
 
 from sqlforge.introspection.catalog import (
@@ -18,11 +17,9 @@ from sqlforge.introspection.structures import (
     PGTypeRegister,
 )
 
-from .relation import TypeOid, ViewStore
+from .relation import Composite, Shape, ViewStore
 
 PGKey = NewType("PGKey", tuple[str | None, str])
-type Shape = Composite | Literal["scalar", "unknown"]
-type Fields = tuple[tuple[str, Oid], ...]
 
 
 class Catalog:
@@ -59,7 +56,7 @@ class Catalog:
         """
         return self._resolve(self._sources, key[0], key[1])
 
-    def shape(self, oid: TypeOid) -> Shape:
+    def shape(self, oid: int | Literal["unknown"]) -> Shape:
         if oid == "unknown":
             return "unknown"
         t = self._unwrap_domain(oid)
@@ -67,7 +64,7 @@ class Catalog:
             return "unknown"
         if not isinstance(t, CompositeType):
             return "scalar"
-        return Composite(tuple((a.name, a.attr_type) for a in t.attributes))
+        return Composite(tuple((a.name, self.shape(a.attr_type)) for a in t.attributes))
 
     def _unwrap_domain(self, oid: Oid) -> PGType | None:
         """
@@ -77,8 +74,3 @@ class Catalog:
         while isinstance(t, DomainType):
             t = self._types.get(t.basetype)
         return t
-
-
-@dataclass(frozen=True, slots=True)
-class Composite:
-    fields: Fields

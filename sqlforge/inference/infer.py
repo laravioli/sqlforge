@@ -13,6 +13,7 @@ from . import transfer as t
 from .catalog import Catalog, PGKey, Table, View
 from .context import Context, Formula, Kind
 from .evaluation import Env, Notebook
+from .evaluation.structures import to_col
 from .evaluation.syntax import is_join_group, is_plain_aggregate
 from .exception import Unsupported
 from .prepare import prepare_view
@@ -27,7 +28,6 @@ class ScopedAnalyzer:
         self.scope = scope
         self.outer = outer
         self.ctx = analyzer.ctx
-        self.catalog = analyzer.catalog
         self.side: list[Formula] = []
         self.notebook: Notebook = Notebook(self.ctx)
 
@@ -141,7 +141,7 @@ class ScopedAnalyzer:
         return Relation(
             ctx=self.ctx,
             names=tuple(e.alias_or_name for e in select.selects),
-            columns=tuple(ev.to_col(e) for e in select.selects),
+            columns=tuple(to_col(ev.eval(e)) for e in select.selects),
             invariant=row.invariant & self.ctx.all(self.side),
         )
 
@@ -229,7 +229,7 @@ class Analyzer:
                     self.ctx.fresh(Kind.BASE)
                     if source.maybe_null(col.name)
                     else self.ctx.false,
-                    col.attr_type,
+                    self.catalog.shape(col.attr_type),
                 )
                 for col in source.columns.values()
             ),
@@ -256,7 +256,7 @@ class Analyzer:
             relation = replace(
                 relation,
                 columns=tuple(
-                    Col(c.null, a.attr_type)
+                    Col(c.null, self.catalog.shape(a.attr_type))
                     for c, a in zip(
                         relation.columns, view.columns.values(), strict=True
                     )
@@ -270,7 +270,7 @@ class Analyzer:
                 ctx=self.ctx,
                 names=tuple(view.columns),
                 columns=tuple(
-                    Col(self.ctx.fresh(Kind.MAYBE), col.attr_type)
+                    Col(self.ctx.fresh(Kind.MAYBE), self.catalog.shape(col.attr_type))
                     for col in view.columns.values()
                 ),
                 invariant=self.ctx.true,

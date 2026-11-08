@@ -9,7 +9,7 @@ from sqlglot import exp
 from sqlforge.inference.catalog import Composite
 from sqlforge.inference.context import Formula, Kind
 from sqlforge.inference.exception import StarNotExpanded, UnknownColumn
-from sqlforge.inference.relation import Col, Subquery, TypeOid
+from sqlforge.inference.relation import Subquery
 
 from .notebook import ALL_NULL, ALL_SET, CONCAT, DOTTED_FIELD, PRED, UNKNOWN, Notebook
 from .structures import KeyedItem, Opaque, Pred, Scalar, Tuple, Value
@@ -41,21 +41,6 @@ class Evaluator:
     def notebook(self) -> Notebook:
         return self.env.scope.notebook
 
-    @property
-    def catalog(self):
-        return self.env.scope.catalog
-
-    def _shape(self, null: Formula, oid: TypeOid, key: exp.Expr):
-        match self.catalog.shape(oid):
-            case "scalar":
-                return Scalar(null, oid, key)
-            case _ as shape:
-                return Opaque(null, oid, shape, key)
-
-    def to_col(self, e: exp.Expr):
-        value = self.eval(e)
-        return Col(value.null, value.oid)
-
     def eval(self, e: exp.Expr) -> Value:
         ctx = self.ctx
         e = e.unnest()
@@ -77,7 +62,11 @@ class Evaluator:
                     c = self.env.item(alias).col(col)
                 except KeyError:
                     raise UnknownColumn((alias, col)) from None
-                return self._shape(c.null, c.type, e)
+                match c.shape:
+                    case "scalar":
+                        return Scalar(c.null, e)
+                    case _ as shape:
+                        return Opaque(c.null, c.shape, e)
 
             case exp.TableColumn(name=alias):
                 item = self.env.item(alias)
@@ -89,20 +78,21 @@ class Evaluator:
                         fields = (
                             dict(shape.fields) if isinstance(shape, Composite) else {}
                         )
-                        return self._shape(
-                            null
-                            | (
-                                ~self.notebook.holds(ALL_SET, key)
-                                & (
-                                    self.notebook.holds(ALL_NULL, key)
-                                    | (self.notebook.null(DOTTED_FIELD, e))
-                                )
-                            ),
-                            fields.get(field.name, "unknown"),
-                            e,
+                        null = null | (
+                            ~self.notebook.holds(ALL_SET, key)
+                            & (
+                                self.notebook.holds(ALL_NULL, key)
+                                | (self.notebook.null(DOTTED_FIELD, e))
+                            )
                         )
+                        match fields.get(field.name, "unknown"):
+                            case "scalar":
+                                return Scalar(null, e)
+                            case _ as s:
+                                return Opaque(null, s, e)
+
                     case _:  # (ROW(a, b)).f1: rare, stay unknown
-                        return Opaque(ctx.fresh(Kind.MAYBE), "unknown", "unknown", e)
+                        return Opaque(ctx.fresh(Kind.MAYBE), "unknown", e)
 
             case _ if is_row(e):
                 return Tuple(
@@ -113,19 +103,19 @@ class Evaluator:
                 return self.eval(this)  # unwrap
 
             case exp.Parameter(this=this):
-                return Opaque(ctx.param(this.to_py()), "unknown", "unknown", e)
+                return Opaque(ctx.param(this.to_py()), "unknown", e)
 
             case exp.Null():
-                return Scalar(ctx.true, "unknown", e)
+                return Scalar(ctx.true, e)
 
             case _ if is_non_null_constant(e):
-                return Scalar(ctx.false, "unknown", e)
+                return Scalar(ctx.false, e)
 
             case exp.Count():
-                return Scalar(ctx.false, "unknown", e)
+                return Scalar(ctx.false, e)
 
             case exp.Select() | exp.SetOperation():  # scalar subquery
-                return Opaque(self._subquery(e).scalar_null, "unknown", "unknown", e)
+                return Opaque(self._subquery(e).scalar_null, "unknown", e)
 
             case exp.Expr(this=head, expressions=tail) if isinstance(
                 e, (exp.Coalesce, exp.Greatest, exp.Least)
@@ -133,45 +123,43 @@ class Evaluator:
                 return Opaque(
                     ctx.all(self.eval(expr).null for expr in [head, *tail]),
                     "unknown",
-                    "unknown",
                     e,
                 )
 
             case exp.Nullif(this=left, expression=right):
                 l, r = self.eval(left), self.eval(right)
                 null = l.null | self._compare_values(exp.EQ, l, r).t
-                return Opaque(null, "unknown", "unknown", e)
+                return Opaque(null, "unknown", e)
 
             case exp.Case():
                 null = ctx.any(
                     taken & self.eval(then).null for taken, then in self._case(e)
                 )
-                return Opaque(null, "unknown", "unknown", e)
+                return Opaque(null, "unknown", e)
 
             case _ if is_boolean_expr(e):
-                return Scalar(self.pred(e).as_null, "unknown", e)
+                return Scalar(self.pred(e).as_null, e)
 
             case exp.Neg(this=this) | exp.BitwiseNot(this=this):
-                return Scalar(self.eval(this).null, "unknown", e)
+                return Scalar(self.eval(this).null, e)
 
             case exp.Cast(this=this):
-                return Opaque(self.eval(this).null, "unknown", "unknown", e)
+                return Opaque(self.eval(this).null, "unknown", e)  # unknown today
 
             case exp.DPipe(this=l, expression=r):
                 null = self.notebook.null(CONCAT, e) & (
                     self.eval(l).null | self.eval(r).null
                 )
-                return Opaque(null, "unknown", "unknown", e)
+                return Opaque(null, "unknown", e)
 
             case _ if is_strict_binary_operator(e):
                 return Scalar(
                     self.eval(e.this).null | self.eval(e.expression).null,
-                    "unknown",
                     e,
                 )
 
             case exp.Array():
-                return Scalar(ctx.false, "unknown", e)
+                return Scalar(ctx.false, e)
 
             case (
                 exp.CurrentDate()
@@ -180,17 +168,17 @@ class Evaluator:
                 | exp.Localtime()
                 | exp.Localtimestamp()
             ):
-                return Scalar(ctx.false, "unknown", e)
+                return Scalar(ctx.false, e)
 
             case exp.Star():
                 raise StarNotExpanded("* must be expanded")
 
             # this block should stay here
             case exp.Func():
-                return Opaque(self._func(e), "unknown", "unknown", e)
+                return Opaque(self._func(e), "unknown", e)
 
             case _:
-                return Opaque(ctx.fresh(Kind.MAYBE), "unknown", "unknown", e)
+                return Opaque(ctx.fresh(Kind.MAYBE), "unknown", e)
 
     def pred(self, e: exp.Expr) -> Pred:
         ctx = self.ctx

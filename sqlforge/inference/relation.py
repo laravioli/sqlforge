@@ -4,15 +4,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from sqlforge.introspection.structures import Oid
-
 from .context import Context, Formula, Kind
 from .lattice import Nullability
 
 type Alias = str
 type Column = str
 type ColKey = tuple[Alias, Column]  # alias.column
-type TypeOid = Oid | Literal["unknown"]
 
 
 def support(fs: Sequence[Formula]):
@@ -20,9 +17,17 @@ def support(fs: Sequence[Formula]):
 
 
 @dataclass(frozen=True, slots=True)
+class Composite:
+    fields: tuple[tuple[str, Shape], ...]
+
+
+type Shape = Composite | Literal["scalar", "unknown"]
+
+
+@dataclass(frozen=True, slots=True)
 class Col:
     null: Formula
-    type: TypeOid
+    shape: Shape
 
     def map(self, f: Callable[[Formula], Formula]) -> Col:  # rename, copy, pad
         """transform null formula"""
@@ -127,14 +132,6 @@ class Item:
 
     def col(self, column: Column):
         return self.columns[self._index[column]]
-
-    def null_of(self, column: Column) -> Formula:
-        """Raise: KeyError"""
-        return self.columns[self._index[column]].null
-
-    def type_of(self, column: Column) -> TypeOid:
-        """Raise: KeyError"""
-        return self.columns[self._index[column]].type
 
     def pad(self, real: Formula) -> Item:
         return replace(
