@@ -22,6 +22,7 @@ class Table:
     ns: str
     name: str
     columns: dict[str, Column]
+    oid: Oid
 
     def maybe_null(self, col: str):
         return self.columns[col].nullable
@@ -52,7 +53,7 @@ def sources(register: PGTypeRegister) -> Generator[Table | View]:
                 | CompositeKind.PARTITIONED_TABLE
                 | CompositeKind.FOREIGN_TABLE
             ):
-                yield Table(t.ns, t.name, columns)
+                yield Table(t.ns, t.name, columns, t.oid)
 
             case ViewType():
                 yield View(t.ns, t.name, columns, t.query)

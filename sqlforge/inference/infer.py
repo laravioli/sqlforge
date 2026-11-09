@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from functools import cached_property, reduce
 from typing import cast, overload
 
@@ -30,6 +29,7 @@ class ScopedAnalyzer:
         self.ctx = analyzer.ctx
         self.side: list[Formula] = []
         self.notebook: Notebook = Notebook(self.ctx)
+        self.catalog = self.analyzer.catalog
 
     def analyse(self):
         scope = self.scope
@@ -205,7 +205,8 @@ class Analyzer:
 
         match source:
             case Table() as table:
-                return self._table_relation(table).row(alias)
+                # table is the only source of stored oid
+                return self._table_relation(table).row(alias, table.oid)
 
             case View() as view:
                 template = self._view_cache.get(key)
@@ -253,15 +254,6 @@ class Analyzer:
 
         try:
             relation = self.run(prepare_view(view, self.catalog.mapping_schema))
-            relation = replace(
-                relation,
-                columns=tuple(
-                    Col(c.null, self.catalog.shape(a.attr_type))
-                    for c, a in zip(
-                        relation.columns, view.columns.values(), strict=True
-                    )
-                ),
-            )
         except Exception as e:
             if not isinstance(e, (SqlglotError, Unsupported)):
                 logger.warning("inference failed on view %s.%s", *key, exc_info=e)

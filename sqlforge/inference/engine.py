@@ -44,13 +44,13 @@ class Engine:
             scope = prepare_sql(statement.source, self.catalog.mapping_schema)
             bypassed = False
 
-            nulls = Analyzer(Context(), self.catalog).run(scope).result()
-            if size != len(nulls):
-                raise Unsupported(f"{len(nulls)} columns inferred, {size} expected")
+            columns = Analyzer(Context(), self.catalog).run(scope).result()
+            if size != len(columns):
+                raise Unsupported(f"{len(columns)} columns inferred, {size} expected")
 
         except (SqlglotError, Unsupported) as e:
-            nulls, bypassed, error = (
-                [MAYBE_NULL] * size,
+            columns, bypassed, error = (
+                (ColumnResult(MAYBE_NULL),) * size,
                 isinstance(e, ByPassed),
                 str(e),
             )
@@ -61,15 +61,15 @@ class Engine:
                 statement.name,
                 exc_info=e,
             )
-            nulls, bypassed, error, internal = (
-                [MAYBE_NULL] * size,
+            columns, bypassed, error, internal = (
+                (ColumnResult(MAYBE_NULL),) * size,
                 False,
                 repr(e),
                 True,
             )
 
         return Analysis(
-            columns=tuple(ColumnResult(null) for null in nulls),
+            columns=columns,
             bypassed=bypassed,
             error=error,
             internal=internal,

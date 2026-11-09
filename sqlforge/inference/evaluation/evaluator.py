@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlglot import exp
 
-from sqlforge.inference.catalog import Composite
+from sqlforge.inference.catalog import Catalog, PGKey
 from sqlforge.inference.context import Formula, Kind
 from sqlforge.inference.exception import StarNotExpanded, UnknownColumn
-from sqlforge.inference.relation import Subquery
+from sqlforge.inference.relation import Composite, Subquery
 
 from .notebook import ALL_NULL, ALL_SET, CONCAT, DOTTED_FIELD, PRED, UNKNOWN, Notebook
-from .structures import KeyedItem, Opaque, Pred, Scalar, Tuple, Value
+from .structures import KeyedItem, Opaque, Pred, Scalar, Tuple, Value, to_value
 from .syntax import (
     Comparison,
     is_boolean_expr,
@@ -41,6 +41,10 @@ class Evaluator:
     def notebook(self) -> Notebook:
         return self.env.scope.notebook
 
+    @property
+    def catalog(self) -> Catalog:
+        return self.env.scope.catalog
+
     def eval(self, e: exp.Expr) -> Value:
         ctx = self.ctx
         e = e.unnest()
@@ -62,11 +66,7 @@ class Evaluator:
                     c = self.env.item(alias).col(col)
                 except KeyError:
                     raise UnknownColumn((alias, col)) from None
-                match c.shape:
-                    case "scalar":
-                        return Scalar(c.null, e)
-                    case _ as shape:
-                        return Opaque(c.null, c.shape, e)
+                return to_value(c.shape, c.null, e)
 
             case exp.TableColumn(name=alias):
                 item = self.env.item(alias)
@@ -75,9 +75,10 @@ class Evaluator:
             case exp.Dot(this=base, expression=field):
                 match self.eval(base):
                     case Opaque(null=null, shape=shape, key=key):
-                        fields = (
+                        shape = (
                             dict(shape.fields) if isinstance(shape, Composite) else {}
-                        )
+                        ).get(field.name, "unknown")
+
                         null = null | (
                             ~self.notebook.holds(ALL_SET, key)
                             & (
@@ -85,11 +86,7 @@ class Evaluator:
                                 | (self.notebook.null(DOTTED_FIELD, e))
                             )
                         )
-                        match fields.get(field.name, "unknown"):
-                            case "scalar":
-                                return Scalar(null, e)
-                            case _ as s:
-                                return Opaque(null, s, e)
+                        return to_value(shape, null, e)
 
                     case _:  # (ROW(a, b)).f1: rare, stay unknown
                         return Opaque(ctx.fresh(Kind.MAYBE), "unknown", e)
@@ -143,8 +140,33 @@ class Evaluator:
             case exp.Neg(this=this) | exp.BitwiseNot(this=this):
                 return Scalar(self.eval(this).null, e)
 
-            case exp.Cast(this=this):
-                return Opaque(self.eval(this).null, "unknown", e)  # unknown today
+            case exp.Cast(this=this, to=to):
+                if (
+                    to.this != exp.DataType.Type.USERDEFINED
+                ):  # TODO: Some user defined type are wrongly parsed as builtin
+                    shape = "scalar"
+                else:
+                    fold = lambda i: i.this if i.quoted else i.this.lower()
+                    match to.args["kind"]:
+                        case exp.Identifier() as name:
+                            shape = self.catalog.shape(PGKey((None, fold(name))))
+                        case exp.Dot(
+                            this=exp.Identifier() as ns,
+                            expression=exp.Identifier() as name,
+                        ):
+                            shape = self.catalog.shape(PGKey((fold(ns), fold(name))))
+                        case _:
+                            shape = "unknown"
+
+                try:
+                    value = self.eval(this)
+                except StarNotExpanded:
+                    this = this.unnest()
+                    if isinstance(this, exp.Column) and this.is_star and this.table:
+                        return KeyedItem(self.env.item(this.table), this)
+                    raise
+
+                return value.cast(shape, e)
 
             case exp.DPipe(this=l, expression=r):
                 null = self.notebook.null(CONCAT, e) & (

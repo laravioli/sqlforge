@@ -6,7 +6,7 @@ from sqlglot import exp
 
 from .context import Context, Formula, Kind
 from .exception import Unsupported
-from .relation import Relation, Row
+from .relation import Col, Relation, Row
 
 
 def setop(node: exp.SetOperation, left: Relation, right: Relation) -> Relation:
@@ -28,8 +28,11 @@ def union(left: Relation, right: Relation) -> Relation:
         ctx=left.ctx,
         names=left.names,
         columns=tuple(
-            col.map(lambda f, r=r: (side & f) | (~side & r))
-            for col, r in zip(left.columns, right.nulls, strict=True)
+            Col(
+                (side & l.null) | (~side & r.null),
+                l.shape if l.shape == r.shape else l.unstored,
+            )
+            for l, r in zip(left.columns, right.columns, strict=True)
         ),
         invariant=(side.implies(left.invariant) & (~side).implies(right.invariant)),
     )

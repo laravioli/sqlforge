@@ -9,7 +9,8 @@ from sqlglot import exp
 
 from sqlforge.inference.catalog import Composite
 from sqlforge.inference.context import Context, Formula, Kind
-from sqlforge.inference.relation import Col, Item, Shape
+from sqlforge.inference.relation import Col, Item
+from sqlforge.inference.structures import Array, Shape
 
 type NullFormula = Formula
 type PredicateFormula = tuple[Formula, Formula]
@@ -64,6 +65,9 @@ class Scalar:
     null: Formula
     key: exp.Expr
 
+    def cast(self, shape: Shape, key: exp.Expr):
+        return _cast(self, shape, self.null, key)
+
 
 @dataclass(frozen=True, slots=True)
 class KeyedItem:
@@ -75,12 +79,15 @@ class KeyedItem:
         return self.item.null
 
     @property
-    def shape(self) -> Shape:
-        return "unknown"
+    def shape(self) -> Composite:
+        return self.item.shape
 
     @property
     def fields(self):
         return self.item.nulls
+
+    def cast(self, shape: Shape, key: exp.Expr):
+        return _cast(self, shape, self.null, key)
 
 
 @dataclass(frozen=True)
@@ -93,8 +100,11 @@ class Tuple:
     key: exp.Expr
 
     @cached_property
-    def fields(self) -> Sequence[Formula]:
-        return [self._null_of(k) for k in self.args]
+    def fields(self) -> tuple[Formula, ...]:
+        return tuple(self._null_of(k) for k in self.args)
+
+    def cast(self, shape: Shape, key: exp.Expr):
+        return _cast(self, shape, self.null, key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,9 +115,30 @@ class Opaque:
     shape: Composite | Literal["unknown"]
     key: exp.Expr
 
+    def cast(self, shape: Shape, key: exp.Expr):
+        return _cast(self, shape, self.null, key)
+
 
 type Value = Scalar | KeyedItem | Tuple | Opaque
 
 
 def to_col(v: Value) -> Col:
     return Col(v.null, v.shape)
+
+
+def to_value(shape: Shape, null: Formula, key: exp.Expr):
+    if shape == "scalar" or isinstance(shape, Array):
+        return Scalar(null, key)
+    return Opaque(null, shape, key)
+
+
+def _cast(
+    from_: Value, shape: Shape, null: Formula, key: exp.Expr
+) -> Scalar | KeyedItem | Opaque:
+    match shape:
+        case "scalar" | Array():
+            return Scalar(null, key)
+        case Composite() if isinstance(from_, KeyedItem):
+            return KeyedItem(from_.item, key)
+        case _:
+            return Opaque(null, shape, key)

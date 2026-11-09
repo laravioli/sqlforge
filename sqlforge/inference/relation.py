@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Literal
+
+from sqlforge.inference.structures import Oid
 
 from .context import Context, Formula, Kind
 from .lattice import Nullability
+from .structures import Array, ColumnResult, Composite, Shape
 
 type Alias = str
 type Column = str
@@ -17,14 +19,6 @@ def support(fs: Sequence[Formula]):
 
 
 @dataclass(frozen=True, slots=True)
-class Composite:
-    fields: tuple[tuple[str, Shape], ...]
-
-
-type Shape = Composite | Literal["scalar", "unknown"]
-
-
-@dataclass(frozen=True, slots=True)
 class Col:
     null: Formula
     shape: Shape
@@ -32,6 +26,28 @@ class Col:
     def map(self, f: Callable[[Formula], Formula]) -> Col:  # rename, copy, pad
         """transform null formula"""
         return replace(self, null=f(self.null))
+
+    @property
+    def stored(self) -> Oid | None:
+        """the table whose rows the values are (for an array: its elements), if any"""
+        match self.shape:
+            case Composite(stored=table) | Array(elem=Composite(stored=table)):
+                return table
+        return None
+
+    @property
+    def unstored(self) -> Shape:
+        return _unstored(self.shape)
+
+
+def _unstored(shape: Shape) -> Shape:
+    """return a Shape with `composite.stored == None` for every composite"""
+    match shape:
+        case Composite(fields=fields):
+            return Composite(tuple((name, _unstored(s)) for name, s in fields))
+        case Array(elem=elem):
+            return Array(_unstored(elem))
+    return shape
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +78,12 @@ class Relation:
     def support(self):
         return support(self.formulas)
 
-    def result(self):
+    def result(self) -> tuple[ColumnResult, ...]:
         sat, inv = self.ctx.sat, self.invariant
-        return [Nullability(sat(inv & f), sat(inv & ~f)) for f in self.nulls]
+        return tuple(
+            ColumnResult(Nullability(sat(inv & c.null), sat(inv & ~c.null)), c.stored)
+            for c in self.columns
+        )
 
     def compress(self):
         hidden = {
@@ -78,7 +97,7 @@ class Relation:
             else self
         )
 
-    def row(self, alias: str):
+    def row(self, alias: str, stored: Oid | None = None):
         columns = self.columns
         names = self.names
         return Row(
@@ -87,6 +106,7 @@ class Relation:
                     names,
                     columns,
                     self.ctx.false,
+                    stored,
                     {name: names.index(name) for name in names},
                 )
             },
@@ -120,6 +140,7 @@ class Item:
     names: tuple[str, ...]
     columns: tuple[Col, ...]
     padded: Formula
+    stored: Oid | None
     _index: dict[str, int]
 
     @property
@@ -129,6 +150,12 @@ class Item:
     @property
     def nulls(self):
         return tuple(c.null for c in self.columns)
+
+    @property
+    def shape(self) -> Composite:
+        return Composite(
+            tuple(zip(self.names, (c.shape for c in self.columns))), self.stored
+        )
 
     def col(self, column: Column):
         return self.columns[self._index[column]]

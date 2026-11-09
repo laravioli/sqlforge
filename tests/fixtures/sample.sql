@@ -115,3 +115,13 @@ select u from (select ua from user_account ua limit 1) as u;
 
 --name : test_dt_comp2:one
 select u.ua from (select ua from user_account ua limit 1) as u;
+
+--name : test_composite_checked:one
+select ua from user_account ua;
+
+--name: test_cast:one
+select ua.*::user_account from user_account ua;
+
+--name: test_cast2:one
+select ua::user_account from user_account ua;
+

@@ -6,6 +6,7 @@ from typing import Protocol
 
 from sqlglot import exp
 
+from sqlforge.inference.catalog import Catalog
 from sqlforge.inference.context import Context, Formula
 from sqlforge.inference.exception import UnknownColumn
 from sqlforge.inference.relation import Alias, Item, Row, Subquery
@@ -21,6 +22,7 @@ class ScopeProtocol(Protocol):
     ctx: Context
     side: list[Formula]
     notebook: Notebook
+    catalog: Catalog
 
     def subquery(self, expr: exp.Select | exp.SetOperation, env: Env) -> Subquery: ...
 

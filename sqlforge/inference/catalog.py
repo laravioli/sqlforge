@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, NewType
+from typing import NewType
 
 from sqlforge.introspection.catalog import (
     DEFAULT_SEARCH_PATH,
@@ -10,14 +10,17 @@ from sqlforge.introspection.catalog import (
     sources,
 )
 from sqlforge.introspection.structures import (
+    ArrayType,
     CompositeType,
     DomainType,
     Oid,
     PGType,
     PGTypeRegister,
+    PseudoType,
 )
 
-from .relation import Composite, Shape, ViewStore
+from .relation import ViewStore
+from .structures import Array, Composite, Shape
 
 PGKey = NewType("PGKey", tuple[str | None, str])
 
@@ -37,6 +40,7 @@ class Catalog:
         self._sources: dict[tuple[str, str], Table | View] = {
             (s.ns, s.name): s for s in sources(type_register)
         }
+        self._shapes: dict[Oid, Shape] = {}
 
     def _resolve[T](
         self, types: dict[tuple[str, str], T], ns: str | None, typ: str
@@ -56,15 +60,28 @@ class Catalog:
         """
         return self._resolve(self._sources, key[0], key[1])
 
-    def shape(self, oid: int | Literal["unknown"]) -> Shape:
-        if oid == "unknown":
-            return "unknown"
-        t = self._unwrap_domain(oid)
-        if t is None:
-            return "unknown"
-        if not isinstance(t, CompositeType):
-            return "scalar"
-        return Composite(tuple((a.name, self.shape(a.attr_type)) for a in t.attributes))
+    def shape(self, key: int | PGKey) -> Shape:
+        if not isinstance(key, int):
+            pg_type = self.pg_type(key)
+            if pg_type is None:
+                return "unknown"
+            key = pg_type.oid
+
+        s = self._shapes.get(key)
+        if s is None:
+            t = self._unwrap_domain(key)
+            if t is None or isinstance(t, PseudoType):
+                s = "unknown"
+            elif isinstance(t, ArrayType):
+                s = Array(self.shape(t.elemtype))
+            elif not isinstance(t, CompositeType):
+                s = "scalar"
+            else:
+                s = Composite(
+                    tuple((a.name, self.shape(a.attr_type)) for a in t.attributes)
+                )
+            self._shapes[key] = s
+        return s
 
     def _unwrap_domain(self, oid: Oid) -> PGType | None:
         """
