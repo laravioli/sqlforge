@@ -9,7 +9,7 @@ from sqlglot import exp
 
 from sqlforge.inference.catalog import Composite
 from sqlforge.inference.context import Context, Formula, Kind
-from sqlforge.inference.relation import Col, Item
+from sqlforge.inference.relation import Item
 from sqlforge.inference.structures import Array, Shape
 
 type NullFormula = Formula
@@ -120,16 +120,6 @@ class Opaque:
 
 
 type Value = Scalar | KeyedItem | Tuple | Opaque
-
-
-def to_col(v: Value) -> Col:
-    return Col(v.null, v.shape)
-
-
-def to_value(shape: Shape, null: Formula, key: exp.Expr):
-    if shape == "scalar" or isinstance(shape, Array):
-        return Scalar(null, key)
-    return Opaque(null, shape, key)
 
 
 def _cast(

@@ -125,3 +125,5 @@ select ua.*::user_account from user_account ua;
 --name: test_cast2:one
 select ua::user_account from user_account ua;
 
+--name : test_cast_coalesce:one
+select coalesce(ua.*::user_account, null) as user from user_account ua;

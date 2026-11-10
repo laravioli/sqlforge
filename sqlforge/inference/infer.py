@@ -12,8 +12,8 @@ from . import transfer as t
 from .catalog import Catalog, PGKey, Table, View
 from .context import Context, Formula, Kind
 from .evaluation import Env, Notebook
-from .evaluation.structures import to_col
 from .evaluation.syntax import is_join_group, is_plain_aggregate
+from .evaluation.utils import to_col
 from .exception import Unsupported
 from .prepare import prepare_view
 from .relation import Col, Relation, Row, Subquery, Template

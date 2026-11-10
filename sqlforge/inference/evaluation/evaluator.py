@@ -12,7 +12,7 @@ from sqlforge.inference.exception import StarNotExpanded, UnknownColumn
 from sqlforge.inference.relation import Composite, Subquery
 
 from .notebook import ALL_NULL, ALL_SET, CONCAT, DOTTED_FIELD, PRED, UNKNOWN, Notebook
-from .structures import KeyedItem, Opaque, Pred, Scalar, Tuple, Value, to_value
+from .structures import KeyedItem, Opaque, Pred, Scalar, Tuple, Value
 from .syntax import (
     Comparison,
     is_boolean_expr,
@@ -24,6 +24,7 @@ from .syntax import (
     is_strict_binary_predicate,
     quantifier,
 )
+from .utils import same_shape, to_value
 
 if TYPE_CHECKING:
     from .env import Env
@@ -112,27 +113,32 @@ class Evaluator:
                 return Scalar(ctx.false, e)
 
             case exp.Select() | exp.SetOperation():  # scalar subquery
-                return Opaque(self._subquery(e).scalar_null, "unknown", e)
+                sub = self._subquery(e)
+                cols = sub.relation.columns
+                # TODO: verify scalar_null is accurate
+                return to_value(
+                    cols[0].shape if len(cols) == 1 else "unknown", sub.scalar_null, e
+                )
 
             case exp.Expr(this=head, expressions=tail) if isinstance(
                 e, (exp.Coalesce, exp.Greatest, exp.Least)
             ):
-                return Opaque(
-                    ctx.all(self.eval(expr).null for expr in [head, *tail]),
-                    "unknown",
+                options = [(x, self.eval(x)) for x in [head, *tail]]
+                return to_value(
+                    same_shape([(x, v.shape) for x, v in options]),
+                    ctx.all(v.null for _, v in options),
                     e,
                 )
 
             case exp.Nullif(this=left, expression=right):
                 l, r = self.eval(left), self.eval(right)
                 null = l.null | self._compare_values(exp.EQ, l, r).t
-                return Opaque(null, "unknown", e)
+                return to_value(l.shape, null, e)
 
             case exp.Case():
-                null = ctx.any(
-                    taken & self.eval(then).null for taken, then in self._case(e)
-                )
-                return Opaque(null, "unknown", e)
+                arms = [(taken, x, self.eval(x)) for taken, x in self._case(e)]
+                null = ctx.any(taken & v.null for taken, _, v in arms)
+                return to_value(same_shape([(x, v.shape) for _, x, v in arms]), null, e)
 
             case _ if is_boolean_expr(e):
                 return Scalar(self.pred(e).as_null, e)
@@ -284,7 +290,7 @@ class Evaluator:
             case (Tuple(), Tuple()):
                 return self._compare_rows(op, l, r)
 
-            case (Tuple(), Opaque(key=exp.Select() | exp.SetOperation())):
+            case (Tuple(), _) if isinstance(r.key, (exp.Select, exp.SetOperation)):
                 return Pred.fresh(self.ctx)
 
             case _:
