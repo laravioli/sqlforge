@@ -8,6 +8,8 @@ from .errors import ConfigError
 
 _CONFIG_LOOKUP = ["sqlforge.toml", "pyproject.toml"]
 
+type Format = Literal["dataclass", "msgspec", "pydantic"]
+
 
 class Config(
     Struct, frozen=True, omit_defaults=True, forbid_unknown_fields=True, rename="kebab"
@@ -16,7 +18,7 @@ class Config(
     out: Path
     dsn: str | None = None
     driver: Literal["asyncpg"] = "asyncpg"
-    format: Literal["dataclass", "msgspec", "pydantic"] = "dataclass"
+    format: Format = "dataclass"
     search_path: tuple[str, ...] = ("public",)
     classes: dict[str, str] = {}
 

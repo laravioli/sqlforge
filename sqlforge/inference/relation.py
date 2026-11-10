@@ -217,9 +217,10 @@ class Template:
 class ViewStore:
     def __init__(self):
         self._ctx = Context()
-        self._store: dict[tuple[str, str], StoredView] = {}
+        self._store: dict[Oid, StoredView] = {}
+        self.results: dict[Oid, tuple[ColumnResult, ...]] = {}
 
-    def import_(self, dest: Context, key: tuple[str, str]) -> StoredView | None:
+    def import_(self, dest: Context, key: Oid) -> StoredView | None:
         """
         viewstore -> currrent analysis
         """
@@ -238,10 +239,11 @@ class ViewStore:
             invariant=fs[-1],
         )
 
-    def export(self, src: Context, key: tuple[str, str], rel: Relation):
+    def export(self, src: Context, key: Oid, rel: Relation):
         """
         current analysis -> viewstore
         """
+        self.results[key] = rel.result()
         rel = rel.compress()
         dest = self._ctx
         order = sorted(rel.support, key=src.bdd.level_of_var)

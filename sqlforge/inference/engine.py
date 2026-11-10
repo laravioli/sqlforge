@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 import time
 
+from msgspec.structs import replace
 from sqlglot.errors import SqlglotError
 
 from sqlforge.inference.structures import PreparedSQL
-from sqlforge.introspection.structures import PGTypeRegister
+from sqlforge.introspection.structures import PGTypeRegister, ViewType
 
 from .catalog import Catalog
 from .context import Context
@@ -20,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class Engine:
-    def __init__(self, type_register: PGTypeRegister):
-        self.catalog = Catalog(type_register)
+    def __init__(self, pg_types: PGTypeRegister):
+        self.catalog = Catalog(pg_types)
 
     def analyze(self, statements: list[PreparedSQL]) -> list[AnalyzedSQL]:
 
@@ -32,6 +33,7 @@ class Engine:
         logger.debug(size)
         if size:
             logger.debug("time : %f ms", (e - s) / (size * 1000000))
+
         return analyze
 
     def analyze_one(self, statement: PreparedSQL) -> Analysis:
@@ -74,3 +76,17 @@ class Engine:
             error=error,
             internal=internal,
         )
+
+    def update_views(self, reg: PGTypeRegister):
+        """Update reg views in place with engine result. Call engine.analyze first"""
+        for oid, result in self.catalog.views.results.items():
+            old_view = reg.get(oid)
+            assert isinstance(old_view, ViewType)
+            reg[oid] = replace(
+                old_view,
+                attributes=[
+                    replace(a, nullable=result[i].nullability.may_null)
+                    for i, a in enumerate(old_view.attributes)
+                ],
+            )
+        return reg

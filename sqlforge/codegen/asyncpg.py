@@ -1,6 +1,6 @@
 from collections.abc import Iterable
-from typing import Literal
 
+from sqlforge.config import Format
 from sqlforge.inference.structures import AnalyzedSQL
 from sqlforge.introspection.structures import (
     ArrayType,
@@ -35,11 +35,11 @@ from .structures import (
 _MANY = (QueryKind.FETCHMANY, QueryKind.EXECMANY)
 
 
-class AsyncpgCodegen:
+class Codegen:
     def __init__(
         self,
         pg_types: PGTypeRegister,
-        format: Literal["dataclass", "msgspec", "pydantic"],
+        format: Format,
     ):
         self.driver = Driver(
             pg_types, {oid: _python_type(oid, pg_types) for oid in pg_types}, format

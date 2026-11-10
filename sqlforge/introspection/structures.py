@@ -99,7 +99,7 @@ class PseudoType(PGType):
 
 
 class ArrayType(PGType):
-    elemtype: Oid  # element type (pg_type.typelem)
+    elemtype: Oid
 
 
 class RangeType(PGType):

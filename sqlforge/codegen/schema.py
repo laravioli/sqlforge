@@ -1,6 +1,6 @@
 import re
-from typing import Literal
 
+from sqlforge.config import Format
 from sqlforge.introspection.structures import (
     CompositeType,
     DomainType,
@@ -14,9 +14,7 @@ from .structures import PYTHON_ANY, Driver
 
 
 class SchemaCodegen:
-    def __init__(
-        self, driver: Driver, format: Literal["dataclass", "msgspec", "pydantic"]
-    ):
+    def __init__(self, driver: Driver, format: Format):
         self.driver = driver
         self.format = format
 
@@ -25,6 +23,7 @@ class SchemaCodegen:
         for pg_text, modules in self._writer(ns):
             body.add(pg_text).newline()
             used |= modules
+
         used.discard(normalize_name(ns))
         schemas = used.intersection(self.driver.normalized_schema_import)
         imports = (

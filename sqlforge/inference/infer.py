@@ -204,18 +204,18 @@ class Analyzer:
         source = self.catalog.source(key)
 
         match source:
+            # tables and views are the only sources of stored oid
             case Table() as table:
-                # table is the only source of stored oid
                 return self._table_relation(table).row(alias, table.oid)
 
             case View() as view:
                 template = self._view_cache.get(key)
                 if template is not None:
-                    return template.materialize().row(alias)
+                    return template.materialize().row(alias, view.oid)
 
                 relation = self._view_relation(view)
                 self._view_cache[key] = Template(relation)
-                return relation.row(alias)
+                return relation.row(alias, view.oid)
 
             case None:
                 raise Unsupported(f"Unknown source {key}")
@@ -239,7 +239,7 @@ class Analyzer:
         # compression is not needed
 
     def _view_relation(self, view: View) -> Relation:
-        key = (view.ns, view.name)
+        key = view.oid
         stored_view = self.catalog.views.import_(self.ctx, key)
 
         if stored_view is not None:
@@ -256,9 +256,11 @@ class Analyzer:
             relation = self.run(prepare_view(view, self.catalog.mapping_schema))
         except Exception as e:
             if not isinstance(e, (SqlglotError, Unsupported)):
-                logger.warning("inference failed on view %s.%s", *key, exc_info=e)
+                logger.warning(
+                    "inference failed on view %s.%s", *(view.ns, view.name), exc_info=e
+                )
 
-            relation = Relation(  # view we can't analyze: every column may be NULL
+            relation = Relation(
                 ctx=self.ctx,
                 names=tuple(view.columns),
                 columns=tuple(

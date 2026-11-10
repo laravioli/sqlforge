@@ -37,6 +37,7 @@ class View:
     ns: str
     name: str
     columns: dict[str, Column]
+    oid: Oid
     query: str
 
 
@@ -56,7 +57,7 @@ def sources(register: PGTypeRegister) -> Generator[Table | View]:
                 yield Table(t.ns, t.name, columns, t.oid)
 
             case ViewType():
-                yield View(t.ns, t.name, columns, t.query)
+                yield View(t.ns, t.name, columns, t.oid, t.query)
 
 
 class SearchPathSchema(MappingSchema):

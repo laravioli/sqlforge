@@ -26,19 +26,19 @@ PGKey = NewType("PGKey", tuple[str | None, str])
 
 
 class Catalog:
-    def __init__(self, type_register: PGTypeRegister, search_path=DEFAULT_SEARCH_PATH):
+    def __init__(self, pg_types: PGTypeRegister, search_path=DEFAULT_SEARCH_PATH):
         self.search_path: tuple[str, ...] = (
             search_path  # TODO: would need an override in config
         )
         self.views = ViewStore()
-        self.mapping_schema = mapping_schema(type_register, search_path)
+        self.mapping_schema = mapping_schema(pg_types, search_path)
 
-        self._types = type_register
+        self._types = pg_types
         self._types_by_name: dict[tuple[str, str], PGType] = {
-            (t.ns, t.name): t for t in type_register.values()
+            (t.ns, t.name): t for t in pg_types.values()
         }
         self._sources: dict[tuple[str, str], Table | View] = {
-            (s.ns, s.name): s for s in sources(type_register)
+            (s.ns, s.name): s for s in sources(pg_types)
         }
         self._shapes: dict[Oid, Shape] = {}
 

@@ -6,8 +6,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
+from sqlforge.config import Format
 from sqlforge.inference.structures import AnalyzedSQL, Nullability
 from sqlforge.introspection.structures import Oid, PGTypeRegister
 from sqlforge.structures import TransformedSQL
@@ -130,7 +131,7 @@ class PythonRangeType:
 class Driver:
     pg_types: PGTypeRegister
     python_types: PythonTypeRegister
-    format: Literal["dataclass", "msgspec", "pydantic"]
+    format: Format
 
     @cached_property
     def schema_import(self):

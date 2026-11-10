@@ -1,16 +1,33 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlglot import exp
 
+from sqlforge.codegen.asyncpg import Codegen
 from sqlforge.errors import DriverError
-from sqlforge.structures import SQL, TransformedSQL
 from sqlforge.utils import isidentifier
 
+if TYPE_CHECKING:
+    from sqlforge.config import Config
+    from sqlforge.inference.structures import AnalyzedSQL
+    from sqlforge.introspection.structures import PGTypeRegister
+    from sqlforge.structures import SQL, TransformedSQL
+
+
+class Asyncpg:
+    def __init__(self, cfg: Config):
+        self.config = cfg
+
+    @staticmethod
+    def transform(sql: SQL) -> TransformedSQL:
+        return sql.transform(_t)
+
+    def out(self, pg_types: PGTypeRegister, sqls: list[AnalyzedSQL]):
+        return Codegen(pg_types, self.config.format).gen(sqls)
+
+
 _RESERVED_PARAMS = frozenset({"conn", "timeout", "record_class", "column", "args"})
-
-
-def transform(sql: SQL) -> TransformedSQL:
-    return sql.transform(_t)
 
 
 def _t(sql: SQL):

@@ -103,21 +103,23 @@ SELECT 'C:\new\table' AS path;
 --name: test_range:fetchval
 SELECT int4range(10, 20);
 
---name : test_multirange:fetchval
+--name: test_multirange:fetchval
 SELECT '{[3,7), [8,9)}'::int4multirange;
 
---name : test_row:one
+--name: test_row:one
 SELECT Row(1,2);
 
-
---name : test_dt_comp:one
+--name: test_dt_comp:one
 select u from (select ua from user_account ua limit 1) as u;
 
---name : test_dt_comp2:one
+--name: test_dt_comp2:one
 select u.ua from (select ua from user_account ua limit 1) as u;
 
---name : test_composite_checked:one
+--name: test_composite_checked:one
 select ua from user_account ua;
+
+--name: test_composite_checked2:one
+select ua::user_account from user_account ua;
 
 --name: test_cast:one
 select ua.*::user_account from user_account ua;
@@ -125,5 +127,14 @@ select ua.*::user_account from user_account ua;
 --name: test_cast2:one
 select ua::user_account from user_account ua;
 
---name : test_cast_coalesce:one
+--name: test_cast_coalesce:one
 select coalesce(ua.*::user_account, null) as user from user_account ua;
+
+--name: test_view:one
+select * from user_base ub;
+
+--name: test_view_comp:one
+select ub from user_base ub;
+
+--name: test_view_comp2:one
+select ub::user_base from user_base ub;
